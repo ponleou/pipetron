@@ -55,28 +55,38 @@ TODO:
 - ensure all virtual device has a chorium binary, if not, delete
 
 actually, just make a virtual device in sync with one chromium device
+
+TODO: destructors
 */
 class VirtualAppNodesManager {
   private:
-    struct virtual_nodes {
+    struct virtual_node_data {
+        uint32_t id;
         pw_context *context;
         pw_core *core;
         pw_stream *stream;
     };
 
-    inline static vector<virtual_nodes> nodes = {};
-    unordered_map<uint32_t, virtual_nodes> output_nodes;
-    unordered_map<uint32_t, virtual_nodes> input_nodes;
+    struct stores_data {
+        struct pw_node *vnode;
+        struct pw_node *onode;
+        const spa_pod *param_data;
+        vector<spa_hook *> listeners; // to destroy
+    };
+
+    inline static vector<stores_data> stores = {};
 
     struct node_info {
         pw_loop *loop;
+        pw_registry *reg;
         string app_process_binary;
         string media_class;
         string media_name;
         spa_audio_info_raw audio_info;
+        virtual_node_data vnode_data; // only populates once a virtual node is created using the node info
     };
 
-    struct listener_data {
+    struct collector_data {
         node_info info;
         spa_hook *listener;
         queue<function<void(node_info)>> post_hook;
@@ -85,59 +95,58 @@ class VirtualAppNodesManager {
     };
 
     static void process_node_info(void *data, const struct pw_node_info *info) {
-        auto *listener_data = (struct listener_data *)data;
+        auto *collector_data = (struct collector_data *)data;
 
-        if (listener_data->info_flag)
+        if (collector_data->info_flag)
             return;
 
         const char *app_process_binary = spa_dict_lookup(info->props, PW_KEY_APP_PROCESS_BINARY);
         const char *media_class = spa_dict_lookup(info->props, PW_KEY_MEDIA_CLASS);
         const char *media_name = spa_dict_lookup(info->props, PW_KEY_MEDIA_NAME);
 
-        listener_data->info.app_process_binary = app_process_binary ? string(app_process_binary) : "";
-        listener_data->info.media_class = media_class ? string(media_class) : "";
-        listener_data->info.media_name = media_name ? string(media_name) : "";
+        collector_data->info.app_process_binary = app_process_binary ? string(app_process_binary) : "";
+        collector_data->info.media_class = media_class ? string(media_class) : "";
+        collector_data->info.media_name = media_name ? string(media_name) : "";
 
-        listener_data->info_flag = true;
+        collector_data->info_flag = true;
 
-        maybe_run_post_hook(listener_data);
+        maybe_run_post_hook(collector_data);
     }
 
     static void process_node_param(void *data, int seq, uint32_t id, uint32_t index, uint32_t next,
                                    const struct spa_pod *param) {
-        auto *listener_data = (struct listener_data *)data;
+        auto *collector_data = (struct collector_data *)data;
 
-        if (listener_data->params_flag)
+        if (collector_data->params_flag)
             return;
 
-        if (id == SPA_PARAM_Format) {
-            auto *node_info = &listener_data->info;
-            spa_format_audio_raw_parse(param, &node_info->audio_info);
-            listener_data->params_flag = true;
+        if (id != SPA_PARAM_Format)
+            return;
 
-            maybe_run_post_hook(listener_data);
-        }
+        auto *node_info = &collector_data->info;
+        spa_format_audio_raw_parse(param, &node_info->audio_info);
+        collector_data->params_flag = true;
+
+        maybe_run_post_hook(collector_data);
     }
 
-    static void maybe_run_post_hook(listener_data *data) {
-        if (data->info_flag && data->params_flag) {
-            spa_hook_remove(data->listener);
-            delete data->listener;
+    static void maybe_run_post_hook(collector_data *data) {
+        if (!(data->info_flag && data->params_flag))
+            return;
 
-            while (!data->post_hook.empty()) {
-                function<void(node_info)> func = data->post_hook.front();
-                data->post_hook.pop();
-                func(data->info);
-            }
+        spa_hook_remove(data->listener);
+        delete data->listener;
+
+        while (!data->post_hook.empty()) {
+            function<void(node_info)> func = data->post_hook.front();
+            data->post_hook.pop();
+            func(data->info);
         }
+
+        delete data;
     }
 
-    static void create_virtual_node(node_info info) {
-        cout << "create node" << endl;
-        cout << "app_process_binary: " << (info.app_process_binary.c_str() ? info.app_process_binary : "NULL") << endl;
-        cout << "media_class: " << (info.media_class.c_str() ? info.media_class : "NULL") << endl;
-        cout << "media_name: " << (info.media_name.c_str() ? info.media_name : "NULL") << endl;
-        cout << "rate: " << info.audio_info.rate << " channels: " << info.audio_info.channels << endl;
+    static void create_virtual_node(node_info &info) {
 
         struct pw_properties *context_props =
             pw_properties_new(PW_KEY_APP_NAME, info.app_process_binary.c_str(), nullptr);
@@ -157,16 +166,74 @@ class VirtualAppNodesManager {
         pw_stream_connect(virtual_stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
                           (enum pw_stream_flags)(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS), params, 1);
 
-        virtual_nodes node = {.context = virtual_context, .core = virtual_core, .stream = virtual_stream};
-        VirtualAppNodesManager::nodes.push_back(node);
+        virtual_node_data vnode = {
+            .id = pw_stream_get_node_id(virtual_stream),
+            .context = virtual_context,
+            .core = virtual_core,
+            .stream = virtual_stream,
+        };
+        info.vnode_data = vnode;
+    }
+
+    static void populate_virtual_stores_data(const node_info &info, stores_data &data) {
+        data.vnode = (struct pw_node *)pw_registry_bind(info.reg, info.vnode_data.id, PW_TYPE_INTERFACE_Node,
+                                                        PW_VERSION_NODE, 0);
+    }
+
+    static void on_vnode_param_props(void *data, int seq, uint32_t id, uint32_t index, uint32_t next,
+                                     const struct spa_pod *param) {
+
+        if (id != SPA_PARAM_Props)
+            return;
+
+        auto *stores_data = (struct stores_data *)data;
+        stores_data->param_data = param;
+        pw_node_set_param(stores_data->onode, SPA_PARAM_Props, 0, stores_data->param_data);
+    }
+
+    static void on_onode_param_props(void *data, int seq, uint32_t id, uint32_t index, uint32_t next,
+                                     const struct spa_pod *param) {
+
+        if (id != SPA_PARAM_Props)
+            return;
+
+        auto *stores_data = (struct stores_data *)data;
+        pw_node_set_param(stores_data->vnode, SPA_PARAM_Props, 0, stores_data->param_data);
+    }
+
+    static void create_sync_listeners(stores_data &data) {
+        struct spa_hook *vnode_listener = new spa_hook();
+        struct spa_hook *onode_listener = new spa_hook();
+
+        data.listeners.push_back(vnode_listener);
+        data.listeners.push_back(onode_listener);
+
+        uint32_t param_ids_sub[] = {SPA_PARAM_Props};
+
+        pw_node_subscribe_params(data.vnode, param_ids_sub, sizeof(param_ids_sub) / sizeof(param_ids_sub[0]));
+        pw_node_subscribe_params(data.onode, param_ids_sub, sizeof(param_ids_sub) / sizeof(param_ids_sub[0]));
+
+        static const struct pw_node_events vnode_events = {
+            .version = PW_VERSION_NODE_EVENTS,
+            .param = VirtualAppNodesManager::on_vnode_param_props,
+        };
+
+        static const struct pw_node_events onode_events = {.version = PW_VERSION_NODE_EVENTS,
+                                                           .param = VirtualAppNodesManager::on_onode_param_props};
+
+        pw_proxy_add_object_listener((struct pw_proxy *)data.vnode, vnode_listener, &vnode_events, (void *)&data);
+        pw_proxy_add_object_listener((struct pw_proxy *)data.onode, onode_listener, &onode_events, (void *)&data);
     }
 
   public:
     static void process_new_node(pw_registry *reg, pw_loop *loop, uint32_t id, const char *type) {
 
+        stores_data *store = new stores_data(); // destroy later
         auto *node = (struct pw_proxy *)pw_registry_bind(reg, id, type, PW_VERSION_NODE, 0);
+        store->onode = (struct pw_node *)node;
 
-        listener_data *data = new listener_data();
+        collector_data *data = new collector_data(); // destroy later
+
         static const struct pw_node_events node_events = {
             .version = PW_VERSION_NODE_EVENTS,
             .info = VirtualAppNodesManager::process_node_info,
@@ -180,10 +247,12 @@ class VirtualAppNodesManager {
         data->params_flag = false;
         data->info = {
             .loop = loop,
+            .reg = reg,
             .app_process_binary = "",
             .media_class = "",
             .media_name = "",
             .audio_info = {},
+            .vnode_data = {},
         };
         data->post_hook = {};
 
@@ -192,102 +261,18 @@ class VirtualAppNodesManager {
         };
         data->post_hook.push(create_virtual_dev_func);
 
-        uint32_t param_ids_sub[] = {SPA_PARAM_Props, SPA_PARAM_Format};
+        uint32_t param_ids_sub[] = {SPA_PARAM_Format};
         pw_node_subscribe_params((struct pw_node *)node, param_ids_sub,
                                  sizeof(param_ids_sub) / sizeof(param_ids_sub[0]));
 
         pw_proxy_add_object_listener(node, listener, &node_events, data);
 
         pw_node_enum_params((struct pw_node *)node, 0, SPA_PARAM_Format, 0, UINT32_MAX, nullptr);
-        pw_node_enum_params((struct pw_node *)node, 0, SPA_PARAM_Props, 0, UINT32_MAX, nullptr);
     }
 };
 
-static void proxy_info_event_add_virtual_streams(void *data, const struct pw_node_info *info) {
-    if (info->props) {
-        auto *reg_data = (struct registry_event_global_data *)data;
-
-        struct pw_properties *context_props = pw_properties_new(PW_KEY_APP_NAME, "Your App Name", nullptr);
-        struct pw_properties *stream_props =
-            pw_properties_new(PW_KEY_MEDIA_TYPE, "Audio", PW_KEY_APP_NAME, "Your App Name", nullptr);
-        struct pw_context *virutal_context =
-            pw_context_new(pw_main_loop_get_loop(reg_data->main_loop), context_props, 0);
-        struct pw_core *virtual_core = pw_context_connect(virutal_context, nullptr, 0);
-        struct pw_stream *stream = pw_stream_new(virtual_core, "Playback", stream_props);
-
-        uint8_t buffer[1024];
-        struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
-        struct spa_audio_info_raw a_info =
-            SPA_AUDIO_INFO_RAW_INIT(.format = SPA_AUDIO_FORMAT_F32, .rate = 48000, .channels = 2);
-
-        const struct spa_pod *params[1];
-        params[0] = spa_format_audio_raw_build(&b, SPA_PARAM_EnumFormat, &a_info);
-
-        pw_stream_connect(stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
-                          (enum pw_stream_flags)(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS), params, 1);
-
-        const struct spa_dict_item *item;
-        spa_dict_for_each(item, info->props) { printf("%s = %s\n", item->key, item->value); }
-        cout << endl;
-    }
-}
-
-// TODO: currently checking volumes
-static void proxy_param_props_event(void *data, int seq, uint32_t id, uint32_t index, uint32_t next,
-                                    const struct spa_pod *param) {
-
-    if (id == SPA_PARAM_Format) {
-        struct spa_audio_info_raw info = {};
-        spa_format_audio_raw_parse(param, &info);
-
-        printf("Rate: %u\n", info.rate);
-        printf("Channels: %u\n", info.channels);
-        printf("Format: %u\n", info.format);
-        printf("Flags: %u\n", info.flags);
-        printf("Position: ");
-        for (uint32_t i = 0; i < info.channels; i++) {
-            printf("%u ", info.position[i]);
-        }
-        printf("\n");
-    }
-
-    if (id == SPA_PARAM_Props) {
-        float volume = 0.0f;
-        bool mute = false;
-        struct spa_pod *channel_vols = nullptr;
-        struct spa_pod *channel_map = nullptr;
-
-        spa_pod_parse_object(param, SPA_TYPE_OBJECT_Props, NULL, SPA_PROP_volume, SPA_POD_OPT_Float(&volume),
-                             SPA_PROP_mute, SPA_POD_OPT_Bool(&mute), SPA_PROP_channelVolumes,
-                             SPA_POD_OPT_Pod(&channel_vols), SPA_PROP_channelMap, SPA_POD_OPT_Pod(&channel_map));
-
-        printf("volume: %f, mute: %d\n", volume, mute);
-
-        if (channel_vols) {
-            uint32_t n_vals;
-            float *vals = (float *)spa_pod_get_array(channel_vols, &n_vals);
-            printf("channelVolumes: ");
-            for (uint32_t i = 0; i < n_vals; i++) {
-                printf("%f ", vals[i]);
-            }
-            printf("\n");
-        }
-
-        if (channel_map) {
-            uint32_t n_channels;
-            uint32_t *channels = (uint32_t *)spa_pod_get_array(channel_map, &n_channels);
-            printf("channelMap: ");
-            for (uint32_t i = 0; i < n_channels; i++) {
-                const char *name = spa_debug_type_find_name(spa_type_audio_channel, channels[i]);
-                printf("%s ", name ? name : "UNKNOWN");
-            }
-            printf("\n");
-        }
-    }
-}
-
-static void reg_event_set_chromium_listeners(void *data, uint32_t id, uint32_t permissions, const char *type,
-                                             uint32_t version, const struct spa_dict *props) {
+static void reg_event_find_chromium_nodes(void *data, uint32_t id, uint32_t permissions, const char *type,
+                                          uint32_t version, const struct spa_dict *props) {
 
     auto *reg_data = (struct registry_event_global_data *)data;
 
@@ -302,20 +287,6 @@ static void reg_event_set_chromium_listeners(void *data, uint32_t id, uint32_t p
 
                 VirtualAppNodesManager::process_new_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id,
                                                          type);
-
-                // cout << "ID: " << id << endl;
-
-                // auto *proxy = (struct pw_proxy *)pw_registry_bind(reg_data->reg, id, type, PW_VERSION_NODE, 0);
-                // static const struct pw_node_events chromium_node_events = {.version = PW_VERSION_NODE_EVENTS,
-                //                                                            .info =
-                //                                                            proxy_info_event_add_virtual_streams,
-                //                                                            .param = proxy_param_props_event};
-
-                // uint32_t param_ids_sub[] = {SPA_PARAM_Props, SPA_PARAM_Format};
-                // pw_node_subscribe_params((struct pw_node *)proxy, param_ids_sub,
-                //                          sizeof(param_ids_sub) / sizeof(param_ids_sub[0]));
-
-                // pw_proxy_add_object_listener(proxy, new spa_hook(), &chromium_node_events, data);
             }
 
             break;
@@ -340,7 +311,7 @@ int main() {
 
     static const struct pw_registry_events registry_events = {
         .version = PW_VERSION_REGISTRY_EVENTS,
-        .global = reg_event_set_chromium_listeners,
+        .global = reg_event_find_chromium_nodes,
     };
 
     struct registry_event_global_data reg_data = {loop, registry};
