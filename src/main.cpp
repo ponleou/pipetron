@@ -84,5 +84,10 @@ int main() {
     pw_context_destroy(context);
     pw_main_loop_destroy(loop);
 
+    spa_hook_remove(listener);
+    delete listener;
+
+    NodesManager::cleanup();
+
     return 0;
 }
