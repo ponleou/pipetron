@@ -9,9 +9,7 @@
 #include "spa/pod/builder.h"
 #include "spa/utils/dict.h"
 #include "spa/utils/hook.h"
-#include "spa/utils/type.h"
 #include <any>
-#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <iostream>
@@ -208,10 +206,7 @@ class ArgStructs {
                 const uint32_t &vnode_id;
 
                 state_change_hook_args(const uint32_t &onode_id, const uint32_t &vnode_id)
-                    : onode_id(onode_id), vnode_id(vnode_id) {
-
-                    cout << "in constructor onode id: " << onode_id << endl;
-                }
+                    : onode_id(onode_id), vnode_id(vnode_id) {}
             };
 
             /**
@@ -280,7 +275,6 @@ class ArgStructs {
             : loop(loop), onode(onode), state_change_callback(state_change_callback) {
             this->vnode_id = 0;
 
-            cout << "in parent constructor onode id: " << onode.id << endl;
             this->state_change_args =
                 new struct state_change_args(new state_change_args::state_change_hook_args(onode.id, this->vnode_id));
         }
@@ -373,12 +367,8 @@ class EventListeners {
 
     static void on_vnode_param_props(void *data, uint32_t id, const struct spa_pod *param) {
 
-        cout << "vnode params event" << endl;
-
         if (id != SPA_PARAM_Props)
             return;
-
-        cout << "sync to onode" << endl;
 
         auto *sync_data = (struct Stores::sync_params_data *)data;
 
@@ -390,12 +380,8 @@ class EventListeners {
     static void on_onode_param_props(void *data, int seq, uint32_t id, uint32_t index, uint32_t next,
                                      const struct spa_pod *param) {
 
-        cout << "onode params event" << endl;
-
         if (id != SPA_PARAM_Props)
             return;
-
-        cout << "sync to vnode" << endl;
 
         auto *sync_data = (Stores::sync_params_data *)data;
 
@@ -451,7 +437,6 @@ class StaticPostHooks {
 
         Stores::sync_params_data &data_sync = Stores::modify_sync_data_entry(args.onode_id);
 
-        cout << "onode id: " << args.onode_id << endl;
         data_sync.vnode_reg = pw_core_get_registry(Stores::get_vnode(args.onode_id).core, PW_VERSION_REGISTRY, 0);
 
         data_sync.vnode = (struct pw_node *)pw_registry_bind(data_sync.vnode_reg, args.vnode_id, PW_TYPE_INTERFACE_Node,
@@ -575,8 +560,6 @@ class NodesManager {
 
   public:
     static void process_new_node(pw_registry *reg, pw_loop *loop, uint32_t id, const char *type) {
-
-        cout << "correct id: " << id << endl;
 
         Stores::modify_sync_data_entry(id).onode =
             (struct pw_node *)pw_registry_bind(reg, id, type, PW_VERSION_NODE, 0);
