@@ -46,6 +46,7 @@ class Stores {
   public:
     struct sync_params_data {
         struct pw_node *vnode;
+        struct pw_registry *vnode_reg;
         struct pw_node *onode;
         bool ignore_next_onode_event;
         const spa_pod *param_data;
@@ -61,13 +62,24 @@ class Stores {
                 if (listener) {
                     spa_hook_remove(listener);
                     delete listener;
+                    listener = nullptr;
                 }
             }
+            this->listeners.clear();
+
             if (this->vnode) {
                 pw_proxy_destroy((pw_proxy *)this->vnode);
+                this->vnode = nullptr;
             }
+
             if (this->onode) {
                 pw_proxy_destroy((pw_proxy *)this->onode);
+                this->onode = nullptr;
+            }
+
+            if (this->vnode_reg) {
+                pw_proxy_destroy((pw_proxy *)this->vnode_reg);
+                this->vnode_reg = nullptr;
             }
         }
     };
@@ -97,12 +109,20 @@ class Stores {
         }
 
         ~virtual_node_data() {
-            if (this->stream)
+            if (this->stream) {
                 pw_stream_destroy(this->stream);
-            if (this->core)
+                this->stream = nullptr;
+            }
+
+            if (this->core) {
                 pw_core_disconnect(this->core);
-            if (this->context)
+                this->core = nullptr;
+            }
+
+            if (this->context) {
                 pw_context_destroy(this->context);
+                this->context = nullptr;
+            }
         }
     };
 
@@ -115,6 +135,7 @@ class Stores {
 
         if (it != map.end()) {
             delete map.at(it->first);
+            it->second = nullptr;
             map.erase(it);
         }
     }
@@ -219,6 +240,7 @@ class ArgStructs {
                     if (this->self_listener) {
                         spa_hook_remove(this->self_listener);
                         delete this->self_listener;
+                        this->self_listener = nullptr;
                     }
                 }
             };
@@ -233,11 +255,15 @@ class ArgStructs {
             }
 
             ~state_change_args() {
-                if (this->hook_args)
+                if (this->hook_args) {
                     delete this->hook_args;
+                    this->hook_args = nullptr;
+                }
 
-                if (this->callback_args)
+                if (this->callback_args) {
                     delete this->callback_args;
+                    this->callback_args = nullptr;
+                }
             }
         };
 
@@ -260,8 +286,10 @@ class ArgStructs {
         }
 
         ~virtual_node_args() {
-            if (this->state_change_args)
+            if (this->state_change_args) {
                 delete this->state_change_args;
+                this->state_change_args = nullptr;
+            }
         }
     };
 
@@ -282,6 +310,7 @@ class ArgStructs {
             if (this->self_listener) {
                 spa_hook_remove(this->self_listener);
                 delete this->self_listener;
+                this->self_listener = nullptr;
             }
         }
     };
@@ -337,7 +366,9 @@ class EventListeners {
 
         state_data->stream_processed_flag = true;
 
-        delete state_data;
+        spa_hook_remove(state_data->self_listener);
+        delete state_data->self_listener;
+        state_data->self_listener = nullptr;
     }
 
     static void on_vnode_param_props(void *data, uint32_t id, const struct spa_pod *param) {
@@ -421,11 +452,10 @@ class StaticPostHooks {
         Stores::sync_params_data &data_sync = Stores::modify_sync_data_entry(args.onode_id);
 
         cout << "onode id: " << args.onode_id << endl;
-        struct pw_registry *vnode_reg =
-            pw_core_get_registry(Stores::get_vnode(args.onode_id).core, PW_VERSION_REGISTRY, 0);
+        data_sync.vnode_reg = pw_core_get_registry(Stores::get_vnode(args.onode_id).core, PW_VERSION_REGISTRY, 0);
 
-        data_sync.vnode =
-            (struct pw_node *)pw_registry_bind(vnode_reg, args.vnode_id, PW_TYPE_INTERFACE_Node, PW_VERSION_NODE, 0);
+        data_sync.vnode = (struct pw_node *)pw_registry_bind(data_sync.vnode_reg, args.vnode_id, PW_TYPE_INTERFACE_Node,
+                                                             PW_VERSION_NODE, 0);
 
         struct spa_hook *vnode_listener = new spa_hook();
         struct spa_hook *onode_listener = new spa_hook();
@@ -475,11 +505,15 @@ class NodesManager {
         ArgStructs::virtual_node_args *vnode_args;
 
         ~process_and_vnode_args_data() {
-            if (this->process_args)
+            if (this->process_args) {
                 delete this->process_args;
+                this->process_args = nullptr;
+            }
 
-            if (this->vnode_args)
+            if (this->vnode_args) {
                 delete this->vnode_args;
+                this->vnode_args = nullptr;
+            }
         }
     };
 
@@ -492,10 +526,13 @@ class NodesManager {
         delete args->process_args->self_listener;
         args->process_args->self_listener = nullptr;
 
-        StaticPostHooks::create_virtual_node(*args->vnode_args);
+        ArgStructs::virtual_node_args *vnode_args = args->vnode_args;
+        args->vnode_args = nullptr;
 
-        delete args->process_args;
-        args->process_args = nullptr;
+        StaticPostHooks::create_virtual_node(*vnode_args);
+
+        delete args;
+        args = nullptr;
     }
 
     static void on_node_info_process_hook(void *data, const struct pw_node_info *info) {
@@ -532,7 +569,7 @@ class NodesManager {
 
         StaticPostHooks::post_virtual_stream_process(*args->state_change_args->hook_args);
 
-        delete args; // TODO: test
+        delete args;
         args = nullptr;
     }
 
@@ -575,5 +612,5 @@ class NodesManager {
         Stores::remove_onode_info_entry(id);
     }
 
-    static void cleanup() {}
+    static void cleanup() { Stores::cleanup(); }
 };
