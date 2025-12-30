@@ -208,3 +208,79 @@ static void proxy_param_props_event(void *data, int seq, uint32_t id, uint32_t i
     }
 }
     */
+
+// class EventQueue {
+
+//   public:
+//     function<void(any)> func;
+//     function<void(void *)> post_hook;
+//     void *post_hook_args;
+
+//     EventQueue(function<void(any)> func, function<void(void *)> post_hook, void *post_hook_args) {
+//         this->func = func;
+//         this->post_hook = post_hook;
+//         this->post_hook_args = post_hook_args;
+//     }
+
+//     template <typename... Args> static function<void(any)> make_unpacker(void (*f)(Args...)) {
+//         return [f](any args) { std::apply(f, any_cast<tuple<Args...>>(args)); };
+//     }
+
+//     /**
+//     @return void function with args:
+//     - void *data,
+//     - int seq,
+//     - uint32_t id,
+//     - uint32_t index,
+//     - uint32_t next,
+//     - const struct spa_pod *param
+//     */
+//     function<void(void *, int, uint32_t, uint32_t, uint32_t, const struct spa_pod *)> node_params() {
+//         auto compiled = [this](void *data, int seq, uint32_t id, uint32_t index, uint32_t next,
+//                                const struct spa_pod *param) {
+//             auto args = make_tuple(data, seq, id, index, next, param);
+//             this->func(args);
+//             post_hook(this->post_hook_args);
+//         };
+
+//         return compiled;
+//     }
+
+//     /**
+//     @return void function with args:
+//     - void *data
+//     - const struct pw_node_info *info
+//     */
+//     function<void(void *, const struct pw_node_info *)> node_info() {
+//         auto compiled = [this](void *data, const struct pw_node_info *info) {
+//             auto args = make_tuple(data, info);
+//             this->func(args);
+//             post_hook(this->post_hook_args);
+//         };
+
+//         return compiled;
+//     }
+
+//     template <EventQueue *Instance> static void node_info_static(void *data, const struct pw_node_info *info) {
+//         auto args = make_tuple(data, info);
+//         Instance->func(args);
+//         Instance->post_hook(Instance->post_hook_args);
+//     }
+
+//     /**
+//     @return void function with args:
+//     - void *data
+//     - enum pw_stream_state old
+//     - enum pw_stream_state state
+//     - const char *error
+//     */
+//     function<void(void *, enum pw_stream_state, enum pw_stream_state, const char *)> stream_state_changed() {
+//         auto compiled = [this](void *data, enum pw_stream_state old, enum pw_stream_state state, const char *error) {
+//             auto args = make_tuple(data, old, state, error);
+//             this->func(args);
+//             post_hook(this->post_hook_args);
+//         };
+
+//         return compiled;
+//     }
+// };

@@ -5,37 +5,19 @@
 #include "pipewire/main-loop.h"
 #include "pipewire/node.h"
 #include "pipewire/pipewire.h"
-#include "pipewire/properties.h"
 #include "pipewire/proxy.h"
-#include "pipewire/stream.h"
-#include "spa/debug/types.h"
-#include "spa/param/param.h"
-#include "spa/param/props.h"
-#include "spa/pod/builder.h"
-#include "spa/pod/iter.h"
-#include "spa/pod/parser.h"
 #include "spa/utils/dict.h"
 #include "spa/utils/hook.h"
-#include "spa/utils/type.h"
 #include <cerrno>
-#include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <functional>
 #include <iostream>
 #include <ostream>
-#include <queue>
 #include <spa/param/audio/format-utils.h>
 #include <string>
-#include <unordered_map>
-#include <vector>
 using std::cout;
 using std::endl;
-using std::function;
-using std::queue;
 using std::string;
-using std::unordered_map;
-using std::vector;
 
 void raiseError(bool condition, string message, int status = 1) {
     if (condition) {

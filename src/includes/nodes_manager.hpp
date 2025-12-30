@@ -1,26 +1,17 @@
 #include "pipewire/context.h"
 #include "pipewire/core.h"
 #include "pipewire/keys.h"
-#include "pipewire/main-loop.h"
 #include "pipewire/node.h"
-#include "pipewire/pipewire.h"
 #include "pipewire/properties.h"
 #include "pipewire/proxy.h"
 #include "pipewire/stream.h"
-#include "spa/debug/types.h"
 #include "spa/param/param.h"
-#include "spa/param/props.h"
 #include "spa/pod/builder.h"
-#include "spa/pod/iter.h"
-#include "spa/pod/parser.h"
 #include "spa/utils/dict.h"
 #include "spa/utils/hook.h"
 #include "spa/utils/type.h"
 #include <any>
-#include <cerrno>
-#include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <functional>
 #include <iostream>
 #include <ostream>
@@ -44,42 +35,68 @@ using std::unordered_map;
 using std::vector;
 
 /*
-TODO:
-- maintain chromium binary -> node id information
-- ensure all chormium binary has a virtual device, if not, create
-- ensure all virtual device has a chorium binary, if not, delete
-
-actually, just make a virtual device in sync with one chromium device
+TODO: move sync data to stores, actually store it there
 
 TODO: destructors
 */
 
 namespace {
-struct onode_info {
-    pw_loop *loop;
-    pw_registry *reg;
-    uint32_t id;
-    string app_process_binary;
-    string media_class;
-    string media_name;
-    spa_audio_info_raw audio_info;
-};
+class Stores {
+  public:
+    struct sync_params_data {
+        struct pw_node *vnode;
+        struct pw_node *onode;
+        bool ignore_next_onode_event;
+        spa_pod param_data;
+        vector<spa_hook *> listeners;
 
-struct process_event_data {
-    onode_info onode_info_ptr;
-    uint32_t vnode_id;
-    spa_hook *listener;
-    bool info_flag;
-    bool params_flag;
-};
+        sync_params_data() {
+            this->param_data = {0, SPA_TYPE_None};
+            this->ignore_next_onode_event = false;
+        }
 
-class StoreStates {
+        ~sync_params_data() {
+            for (spa_hook *listener : listeners) {
+                if (listener) {
+                    spa_hook_remove(listener);
+                    delete listener;
+                }
+            }
+            if (vnode) {
+                pw_proxy_destroy((pw_proxy *)vnode);
+            }
+            if (onode) {
+                pw_proxy_destroy((pw_proxy *)onode);
+            }
+        }
+    };
+
+    struct onode_info {
+        uint32_t id;
+        string app_process_binary;
+        string media_class;
+        string media_name;
+        spa_audio_info_raw audio_info;
+
+        onode_info() {
+            this->id = 0;
+            this->audio_info = {};
+        }
+    };
+
   private:
     struct virtual_node_data {
         uint32_t id;
         pw_context *context;
         pw_core *core;
         pw_stream *stream;
+
+        virtual_node_data(uint32_t id, pw_context *context, pw_core *core, pw_stream *stream) {
+            this->id = id;
+            this->context = context;
+            this->core = core;
+            this->stream = stream;
+        }
 
         ~virtual_node_data() {
             if (stream)
@@ -91,89 +108,181 @@ class StoreStates {
         }
     };
 
-    inline static unordered_map<uint32_t, StoreStates::virtual_node_data> onode_to_vnode = {};
+    inline static unordered_map<uint32_t, Stores::virtual_node_data *> onode_to_vnode = {};
+    inline static unordered_map<uint32_t, Stores::onode_info *> onode_infos = {};
 
   public:
-    static const virtual_node_data &get_vnode(uint32_t onode_id) { return onode_to_vnode[onode_id]; }
+    static const virtual_node_data &get_vnode(uint32_t onode_id) { return *onode_to_vnode.at(onode_id); }
 
     static const void set_vnode(uint32_t onode_id, uint32_t vnode_id, pw_context *context, pw_core *core,
                                 pw_stream *stream) {
 
-        onode_to_vnode[onode_id].id = vnode_id;
-        onode_to_vnode[onode_id].context = context;
-        onode_to_vnode[onode_id].core = core;
-        onode_to_vnode[onode_id].stream = stream;
+        onode_to_vnode.emplace(onode_id, new virtual_node_data(vnode_id, context, core, stream));
     }
 
-    static void remove_onode_entry(uint32_t onode_id) {
+    static void remove_vnode_entry(uint32_t onode_id) {
         auto it = onode_to_vnode.find(onode_id);
 
-        if (it != onode_to_vnode.end())
+        if (it != onode_to_vnode.end()) {
+            delete onode_to_vnode.at(it->first);
             onode_to_vnode.erase(it);
+        }
     }
+
+    static const onode_info &get_onode_info(uint32_t onode_id) { return *onode_infos.at(onode_id); }
+
+    static onode_info &modify_onode_info_entry(uint32_t onode_id) {
+
+        if (onode_infos.find(onode_id) == onode_infos.end()) {
+            onode_infos[onode_id] = new onode_info();
+            onode_infos[onode_id]->id = onode_id;
+        }
+
+        return *onode_infos[onode_id];
+    }
+
+    static void remove_onode_info_entry(uint32_t onode_id) {
+        auto it = onode_infos.find(onode_id);
+
+        if (it != onode_infos.end()) {
+            delete onode_infos.at(it->first);
+            onode_infos.erase(it);
+        }
+    }
+};
+
+class ArgStructs {
+  public:
+    /**
+    topology: virtual_node_args > state_change_args > state_change_callback_args + state_change_hook_args
+    */
+    struct virtual_node_args {
+
+        // structs
+        struct state_change_args {
+
+            // structs
+            struct state_change_hook_args {
+
+                // properties
+                const uint32_t &onode_id;
+                const uint32_t &vnode_id;
+                Stores::sync_params_data &sync_data;
+
+                state_change_hook_args(const uint32_t &onode_id, const uint32_t &vnode_id,
+                                       Stores::sync_params_data &sync_data)
+                    : onode_id(onode_id), vnode_id(vnode_id), sync_data(sync_data) {}
+            };
+
+            /**
+            temporary data to set vnode's data upon stream state paused (when virtual stream finishes setting up
+            async) self destructed by on_stream_state_changed_process_vnode_id()
+            */
+            struct state_change_callback_args {
+                // properties
+                uint32_t &vnode_id;
+                struct pw_context &context;
+                struct pw_core &core;
+                struct pw_stream &stream;
+                bool stream_processed_flag;
+
+                const uint32_t &onode_id;
+                spa_hook *self_listener;
+
+                state_change_callback_args(const uint32_t &onode_id, uint32_t &vnode_id, spa_hook *listener,
+                                           pw_context &vcontext, pw_core &vcore, pw_stream &vstream)
+                    : vnode_id(vnode_id), context(vcontext), core(vcore), stream(vstream), onode_id(onode_id) {
+                    this->stream_processed_flag = false;
+                    this->self_listener = listener;
+                }
+
+                ~state_change_callback_args() {
+                    if (self_listener) {
+                        spa_hook_remove(self_listener);
+                        delete self_listener;
+                    }
+                }
+            };
+
+            // properties
+            state_change_callback_args *callback_args;
+            state_change_hook_args *hook_args;
+
+            state_change_args(state_change_hook_args *hook_args) {
+                this->hook_args = hook_args;
+                this->callback_args = nullptr;
+            }
+        };
+
+        // properties
+        struct pw_loop &loop;
+        const Stores::onode_info &onode;
+        uint32_t vnode_id;
+        void (*state_change_callback)(void *, enum pw_stream_state, enum pw_stream_state, const char *);
+        state_change_args *state_change_args;
+
+        virtual_node_args(struct pw_loop &loop, const Stores::onode_info &onode,
+                          void (*state_change_callback)(void *, enum pw_stream_state, enum pw_stream_state,
+                                                        const char *),
+                          Stores::sync_params_data &sync_data)
+            : loop(loop), onode(onode), state_change_callback(state_change_callback) {
+            this->vnode_id = 0;
+            this->state_change_args = new struct state_change_args(
+                new state_change_args::state_change_hook_args(onode.id, this->vnode_id, sync_data));
+        }
+    };
+
+    struct process_onode_info_args {
+        Stores::onode_info &onode;
+        bool info_flag;
+        bool params_flag;
+
+        spa_hook *self_listener;
+
+        process_onode_info_args(Stores::onode_info &onode_info, spa_hook *listener) : onode(onode_info) {
+            this->self_listener = listener;
+            this->info_flag = false;
+            this->params_flag = false;
+        }
+
+        ~process_onode_info_args() {
+            if (self_listener) {
+                spa_hook_remove(self_listener);
+                delete self_listener;
+            }
+        }
+    };
 };
 
 class EventListeners {
   public:
     // for syncing params between vnode and onode
-    struct sync_params_data {
-        struct pw_node *vnode;
-        struct pw_node *onode;
-        bool ignore_next_onode_event;
-        const spa_pod *param_data;
-        vector<spa_hook *> listeners; // to destroy
-    };
 
-    static void on_node_info_process(void *data, const struct pw_node_info *info) {
-        auto *process_data = (struct process_event_data *)data;
-
-        if (process_data->info_flag)
-            return;
+    static void on_node_info_process_onode_info(void *data, const struct pw_node_info *info) {
+        auto *process_data = (ArgStructs::process_onode_info_args *)data;
 
         const char *app_process_binary = spa_dict_lookup(info->props, PW_KEY_APP_PROCESS_BINARY);
         const char *media_class = spa_dict_lookup(info->props, PW_KEY_MEDIA_CLASS);
         const char *media_name = spa_dict_lookup(info->props, PW_KEY_MEDIA_NAME);
 
-        process_data->onode_info_ptr.app_process_binary = app_process_binary ? string(app_process_binary) : "";
-        process_data->onode_info_ptr.media_class = media_class ? string(media_class) : "";
-        process_data->onode_info_ptr.media_name = media_name ? string(media_name) : "";
+        process_data->onode.app_process_binary = app_process_binary ? string(app_process_binary) : "";
+        process_data->onode.media_class = media_class ? string(media_class) : "";
+        process_data->onode.media_name = media_name ? string(media_name) : "";
 
         process_data->info_flag = true;
     }
 
-    static void on_node_param_process(void *data, int seq, uint32_t id, uint32_t index, uint32_t next,
-                                      const struct spa_pod *param) {
-        auto *process_data = (struct process_event_data *)data;
-
-        if (process_data->params_flag)
-            return;
+    static void on_node_param_process_onode_info(void *data, int seq, uint32_t id, uint32_t index, uint32_t next,
+                                                 const struct spa_pod *param) {
+        auto *process_data = (ArgStructs::process_onode_info_args *)data;
 
         if (id != SPA_PARAM_Format)
             return;
 
-        auto *onode_info = &process_data->onode_info_ptr;
+        auto *onode_info = &process_data->onode;
         spa_format_audio_raw_parse(param, &onode_info->audio_info);
         process_data->params_flag = true;
     }
-
-    // temporary data to set vnode's data upon stream state paused (when virtual stream finishes setting up async)
-    // self destructed by on_stream_state_changed_process_vnode_id()
-    struct stream_state_changed_data {
-        const uint32_t *onode_id;
-        uint32_t *vnode_id;
-        spa_hook *listener;
-        bool stream_processed_flag;
-        struct pw_context *context;
-        struct pw_core *core;
-        struct pw_stream *stream;
-
-        ~stream_state_changed_data() {
-            if (listener) {
-                spa_hook_remove(listener);
-                delete listener;
-            }
-        }
-    };
 
     static void on_stream_state_changed_process_vnode_id(void *data, enum pw_stream_state old,
                                                          enum pw_stream_state state, const char *error) {
@@ -182,11 +291,16 @@ class EventListeners {
         if (state != PW_STREAM_STATE_PAUSED)
             return;
 
-        stream_state_changed_data *state_data = (stream_state_changed_data *)data;
+        ArgStructs::virtual_node_args::state_change_args::state_change_callback_args *state_data =
+            (ArgStructs::virtual_node_args::state_change_args::state_change_callback_args *)data;
 
-        *state_data->vnode_id = pw_stream_get_node_id(state_data->stream);
-        StoreStates::set_vnode(*state_data->onode_id, *state_data->vnode_id, state_data->context, state_data->core,
-                               state_data->stream);
+        if (state_data->stream_processed_flag)
+            return;
+
+        state_data->vnode_id = pw_stream_get_node_id(&state_data->stream);
+
+        Stores::set_vnode(state_data->onode_id, state_data->vnode_id, &state_data->context, &state_data->core,
+                          &state_data->stream);
 
         state_data->stream_processed_flag = true;
 
@@ -202,11 +316,11 @@ class EventListeners {
 
         cout << "sync to onode" << endl;
 
-        auto *sync_data = (struct EventListeners::sync_params_data *)data;
+        auto *sync_data = (struct Stores::sync_params_data *)data;
 
-        sync_data->param_data = param;
+        sync_data->param_data = *param;
         sync_data->ignore_next_onode_event = true;
-        pw_node_set_param(sync_data->onode, SPA_PARAM_Props, 0, sync_data->param_data);
+        pw_node_set_param(sync_data->onode, SPA_PARAM_Props, 0, &sync_data->param_data);
     }
 
     static void on_onode_param_props(void *data, int seq, uint32_t id, uint32_t index, uint32_t next,
@@ -219,7 +333,7 @@ class EventListeners {
 
         cout << "sync to vnode" << endl;
 
-        auto *sync_data = (EventListeners::sync_params_data *)data;
+        auto *sync_data = (Stores::sync_params_data *)data;
 
         if (sync_data->ignore_next_onode_event) {
             sync_data->ignore_next_onode_event = false;
@@ -227,110 +341,69 @@ class EventListeners {
         }
 
         sync_data->ignore_next_onode_event = true;
-        pw_node_set_param(sync_data->onode, SPA_PARAM_Props, 0, sync_data->param_data);
+        pw_node_set_param(sync_data->onode, SPA_PARAM_Props, 0, &sync_data->param_data);
     }
 };
 
 // dependent on EventListeners (run after events)
 class StaticPostHooks {
   public:
-    struct virtual_node_args {
-        struct state_change_hook_args {
-            const onode_info *onode_info_ptr;
-            const uint32_t *vnode_id;
-            EventListeners::sync_params_data *sync_data;
-        };
-
-        struct state_change_args {
-            EventListeners::stream_state_changed_data *callback_args;
-            state_change_hook_args *hook_args;
-        };
-
-        const onode_info *onode_info_ptr;
-        uint32_t *vnode_id;
-        void (*state_change_callback)(void *, enum pw_stream_state, enum pw_stream_state, const char *);
-        state_change_args *state_change_args;
-    };
-
-    static void create_virtual_node(const struct virtual_node_args &args) {
+    static void create_virtual_node(struct ArgStructs::virtual_node_args &args) {
 
         struct pw_properties *context_props =
-            pw_properties_new(PW_KEY_APP_NAME, args.onode_info_ptr->app_process_binary.c_str(), nullptr);
-        struct pw_context *virtual_context = pw_context_new(args.onode_info_ptr->loop, context_props, 0);
+            pw_properties_new(PW_KEY_APP_NAME, args.onode.app_process_binary.c_str(), nullptr);
+        struct pw_context *virtual_context = pw_context_new(&args.loop, context_props, 0);
         struct pw_core *virtual_core = pw_context_connect(virtual_context, nullptr, 0);
 
         struct pw_properties *stream_props = pw_properties_new(
-            PW_KEY_MEDIA_TYPE, "Audio", PW_KEY_APP_NAME, args.onode_info_ptr->app_process_binary.c_str(),
-            PW_KEY_MEDIA_CLASS, args.onode_info_ptr->media_class.c_str(), PW_KEY_APP_ICON_NAME,
-            args.onode_info_ptr->app_process_binary.c_str(), PW_KEY_APP_PROCESS_BINARY,
-            args.onode_info_ptr->app_process_binary.c_str(), nullptr);
-        struct pw_stream *virtual_stream =
-            pw_stream_new(virtual_core, args.onode_info_ptr->media_name.c_str(), stream_props);
+            PW_KEY_MEDIA_TYPE, "Audio", PW_KEY_APP_NAME, args.onode.app_process_binary.c_str(), PW_KEY_MEDIA_CLASS,
+            args.onode.media_class.c_str(), PW_KEY_APP_ICON_NAME, args.onode.app_process_binary.c_str(),
+            PW_KEY_APP_PROCESS_BINARY, args.onode.app_process_binary.c_str(), nullptr);
+        struct pw_stream *virtual_stream = pw_stream_new(virtual_core, args.onode.media_name.c_str(), stream_props);
 
         uint8_t buffer[1024];
         struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
         const struct spa_pod *params[1];
-        params[0] = spa_format_audio_raw_build(&builder, SPA_PARAM_EnumFormat, &args.onode_info_ptr->audio_info);
+        params[0] = spa_format_audio_raw_build(&builder, SPA_PARAM_EnumFormat, &args.onode.audio_info);
 
         static const struct pw_stream_events stream_events = {
             .version = PW_VERSION_STREAM_EVENTS,
             .state_changed = args.state_change_callback,
         };
 
-        struct spa_hook *listener = new spa_hook();
+        args.state_change_args->callback_args =
+            new ArgStructs::virtual_node_args::state_change_args::state_change_callback_args(
+                args.onode.id, args.vnode_id, new spa_hook(), *virtual_context, *virtual_core, *virtual_stream);
 
-        EventListeners::stream_state_changed_data *stream_data =
-            new EventListeners::stream_state_changed_data(); // destory FIXME:
-        stream_data->vnode_id = args.vnode_id;
-        stream_data->stream = virtual_stream;
-        stream_data->listener = listener;
-        stream_data->onode_id = &args.onode_info_ptr->id;
-        stream_data->context = virtual_context;
-        stream_data->core = virtual_core;
-        stream_data->stream_processed_flag = false;
-
-        args.state_change_args->callback_args = stream_data;
-
-        pw_stream_add_listener(virtual_stream, listener, &stream_events, (void *)args.state_change_args);
+        pw_stream_add_listener(virtual_stream, args.state_change_args->callback_args->self_listener, &stream_events,
+                               (void *)args.state_change_args);
 
         pw_stream_connect(virtual_stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
                           (enum pw_stream_flags)(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS), params, 1);
     }
 
-    static void post_virtual_stream_process(const virtual_node_args::state_change_hook_args &args) {
-        const uint32_t onode_id = args.onode_info_ptr->id;
+    static void
+    post_virtual_stream_process(const ArgStructs::virtual_node_args::state_change_args::state_change_hook_args &args) {
+
+        cout << "onode id: " << args.onode_id << endl;
         struct pw_registry *vnode_reg =
-            pw_core_get_registry(StoreStates::get_vnode(onode_id).core, PW_VERSION_REGISTRY, 0);
+            pw_core_get_registry(Stores::get_vnode(args.onode_id).core, PW_VERSION_REGISTRY, 0);
 
-        args.sync_data->vnode =
-            (struct pw_node *)pw_registry_bind(vnode_reg, *args.vnode_id, PW_TYPE_INTERFACE_Node, PW_VERSION_NODE, 0);
-
-        cout << "vnode pointer: " << (void *)args.sync_data->vnode << endl;
-        cout << "vnode_id: " << *args.vnode_id << endl;
-
-        cout << "Creating sync listeners" << endl;
-        cout << "vnode ptr: " << (void *)args.sync_data->vnode << endl;
-        cout << "onode ptr: " << (void *)args.sync_data->onode << endl;
+        args.sync_data.vnode =
+            (struct pw_node *)pw_registry_bind(vnode_reg, args.vnode_id, PW_TYPE_INTERFACE_Node, PW_VERSION_NODE, 0);
 
         struct spa_hook *vnode_listener = new spa_hook();
         struct spa_hook *onode_listener = new spa_hook();
 
-        args.sync_data->listeners.push_back(vnode_listener);
-        args.sync_data->listeners.push_back(onode_listener);
+        args.sync_data.listeners.push_back(vnode_listener);
+        args.sync_data.listeners.push_back(onode_listener);
 
         uint32_t param_ids_sub[] = {SPA_PARAM_Props};
 
-        pw_node_subscribe_params(args.sync_data->vnode, param_ids_sub,
-                                 sizeof(param_ids_sub) / sizeof(param_ids_sub[0]));
-        pw_node_subscribe_params(args.sync_data->onode, param_ids_sub,
-                                 sizeof(param_ids_sub) / sizeof(param_ids_sub[0]));
+        pw_node_subscribe_params(args.sync_data.vnode, param_ids_sub, sizeof(param_ids_sub) / sizeof(param_ids_sub[0]));
+        pw_node_subscribe_params(args.sync_data.onode, param_ids_sub, sizeof(param_ids_sub) / sizeof(param_ids_sub[0]));
 
-        cout << "Subscribed to params" << endl;
-
-        struct pw_stream *vstream = StoreStates::get_vnode(args.onode_info_ptr->id).stream; // FIXME:
-
-        // cout << "vstream ptr: " << (void *)vstream
-        //      << " onode id: " << pw_proxy_get_id((struct pw_proxy *)args.sync_data->onode) << endl;
+        struct pw_stream *vstream = Stores::get_vnode(args.onode_id).stream;
 
         static const struct pw_stream_events vnode_events = {
             .version = PW_VERSION_STREAM_EVENTS,
@@ -343,138 +416,66 @@ class StaticPostHooks {
         };
 
         // pw_proxy_add_object_listener((struct pw_proxy *)data.vnode, vnode_listener, &vnode_events, (void *)&data);
-        pw_stream_add_listener(vstream, vnode_listener, &vnode_events, (void *)args.sync_data);
-        pw_proxy_add_object_listener((struct pw_proxy *)args.sync_data->onode, onode_listener, &onode_events,
-                                     (void *)args.sync_data);
+        pw_stream_add_listener(vstream, vnode_listener, &vnode_events, (void *)&args.sync_data);
+        pw_proxy_add_object_listener((struct pw_proxy *)args.sync_data.onode, onode_listener, &onode_events,
+                                     (void *)&args.sync_data);
 
-        cout << "Added listeners" << endl;
-
-        pw_node_enum_params(args.sync_data->vnode, 0, SPA_PARAM_Props, 0, UINT32_MAX, nullptr);
+        pw_node_enum_params(args.sync_data.vnode, 0, SPA_PARAM_Props, 0, UINT32_MAX, nullptr);
         pw_stream_update_params(vstream, nullptr, 0);
-
-        cout << "Enumerated vnode params" << endl;
     }
 };
-
-// class EventQueue {
-
-//   public:
-//     function<void(any)> func;
-//     function<void(void *)> post_hook;
-//     void *post_hook_args;
-
-//     EventQueue(function<void(any)> func, function<void(void *)> post_hook, void *post_hook_args) {
-//         this->func = func;
-//         this->post_hook = post_hook;
-//         this->post_hook_args = post_hook_args;
-//     }
-
-//     template <typename... Args> static function<void(any)> make_unpacker(void (*f)(Args...)) {
-//         return [f](any args) { std::apply(f, any_cast<tuple<Args...>>(args)); };
-//     }
-
-//     /**
-//     @return void function with args:
-//     - void *data,
-//     - int seq,
-//     - uint32_t id,
-//     - uint32_t index,
-//     - uint32_t next,
-//     - const struct spa_pod *param
-//     */
-//     function<void(void *, int, uint32_t, uint32_t, uint32_t, const struct spa_pod *)> node_params() {
-//         auto compiled = [this](void *data, int seq, uint32_t id, uint32_t index, uint32_t next,
-//                                const struct spa_pod *param) {
-//             auto args = make_tuple(data, seq, id, index, next, param);
-//             this->func(args);
-//             post_hook(this->post_hook_args);
-//         };
-
-//         return compiled;
-//     }
-
-//     /**
-//     @return void function with args:
-//     - void *data
-//     - const struct pw_node_info *info
-//     */
-//     function<void(void *, const struct pw_node_info *)> node_info() {
-//         auto compiled = [this](void *data, const struct pw_node_info *info) {
-//             auto args = make_tuple(data, info);
-//             this->func(args);
-//             post_hook(this->post_hook_args);
-//         };
-
-//         return compiled;
-//     }
-
-//     template <EventQueue *Instance> static void node_info_static(void *data, const struct pw_node_info *info) {
-//         auto args = make_tuple(data, info);
-//         Instance->func(args);
-//         Instance->post_hook(Instance->post_hook_args);
-//     }
-
-//     /**
-//     @return void function with args:
-//     - void *data
-//     - enum pw_stream_state old
-//     - enum pw_stream_state state
-//     - const char *error
-//     */
-//     function<void(void *, enum pw_stream_state, enum pw_stream_state, const char *)> stream_state_changed() {
-//         auto compiled = [this](void *data, enum pw_stream_state old, enum pw_stream_state state, const char *error) {
-//             auto args = make_tuple(data, old, state, error);
-//             this->func(args);
-//             post_hook(this->post_hook_args);
-//         };
-
-//         return compiled;
-//     }
-// };
 
 } // namespace
 
 class NodesManager {
 
   private:
-    struct process_and_ph_args_data {
-        process_event_data *process_data;
-        StaticPostHooks::virtual_node_args *ph_args_data;
+    struct process_and_vnode_args_data {
+        ArgStructs::process_onode_info_args *process_args;
+        ArgStructs::virtual_node_args *vnode_args;
     };
 
-    static void maybe_run_post_process(process_and_ph_args_data *args) {
+    static void maybe_run_post_process(process_and_vnode_args_data *args) {
 
-        if (!(args->process_data->info_flag && args->process_data->params_flag))
+        if (!(args->process_args->info_flag && args->process_args->params_flag))
             return;
 
-        spa_hook_remove(args->process_data->listener);
-        delete args->process_data->listener;
+        spa_hook_remove(args->process_args->self_listener);
+        delete args->process_args->self_listener;
+        args->process_args->self_listener = nullptr;
 
-        StaticPostHooks::create_virtual_node(*args->ph_args_data);
+        StaticPostHooks::create_virtual_node(*args->vnode_args);
 
-        delete args->process_data;
+        delete args->process_args;
+        args->process_args = nullptr;
     }
 
     static void on_node_info_process_hook(void *data, const struct pw_node_info *info) {
-        process_and_ph_args_data *args = (process_and_ph_args_data *)data;
+        process_and_vnode_args_data *args = (process_and_vnode_args_data *)data;
 
-        EventListeners::on_node_info_process((void *)args->process_data, info);
+        if (args->process_args->info_flag)
+            return;
+
+        EventListeners::on_node_info_process_onode_info((void *)args->process_args, info);
         NodesManager::maybe_run_post_process(args);
     }
 
     static void on_node_param_process_hook(void *data, int seq, uint32_t id, uint32_t index, uint32_t next,
                                            const struct spa_pod *param) {
 
-        process_and_ph_args_data *args = (process_and_ph_args_data *)data;
+        process_and_vnode_args_data *args = (process_and_vnode_args_data *)data;
 
-        EventListeners::on_node_param_process((void *)args->process_data, seq, id, index, next, param);
+        if (args->process_args->params_flag)
+            return;
+
+        EventListeners::on_node_param_process_onode_info((void *)args->process_args, seq, id, index, next, param);
         NodesManager::maybe_run_post_process(args);
     }
 
-    static void on_state_change_callback(void *data, enum pw_stream_state old, enum pw_stream_state state,
-                                         const char *error) {
-        struct StaticPostHooks::virtual_node_args::state_change_args *args =
-            (struct StaticPostHooks::virtual_node_args::state_change_args *)data;
+    static void on_state_change_callback_hook(void *data, enum pw_stream_state old, enum pw_stream_state state,
+                                              const char *error) {
+        struct ArgStructs::virtual_node_args::state_change_args *args =
+            (struct ArgStructs::virtual_node_args::state_change_args *)data;
 
         EventListeners::on_stream_state_changed_process_vnode_id((void *)args->callback_args, old, state, error);
 
@@ -487,9 +488,9 @@ class NodesManager {
   public:
     static void process_new_node(pw_registry *reg, pw_loop *loop, uint32_t id, const char *type) {
 
-        EventListeners::sync_params_data *sync_data = new EventListeners::sync_params_data(); // destroy later
-        auto *node = (struct pw_proxy *)pw_registry_bind(reg, id, type, PW_VERSION_NODE, 0);
-        sync_data->onode = (struct pw_node *)node;
+        Stores::sync_params_data *sync_data =
+            new Stores::sync_params_data(); // destroy later, TODO: should not be stored here, store it in stores
+        sync_data->onode = (struct pw_node *)pw_registry_bind(reg, id, type, PW_VERSION_NODE, 0);
 
         static const struct pw_node_events node_events = {
             .version = PW_VERSION_NODE_EVENTS,
@@ -497,51 +498,23 @@ class NodesManager {
             .param = NodesManager::on_node_param_process_hook,
         };
 
-        struct spa_hook *listener = new spa_hook();
+        ArgStructs::process_onode_info_args *process_args = new ArgStructs::process_onode_info_args(
+            Stores::modify_onode_info_entry(id), new spa_hook()); // destroy later FIXME:
 
-        process_event_data *data = new process_event_data(); // destroy later FIXME:
-
-        data->listener = listener;
-        data->info_flag = false;
-        data->params_flag = false;
-        data->onode_info_ptr = {
-            .loop = loop,
-            .reg = reg,
-            .id = id,
-            .app_process_binary = "",
-            .media_class = "",
-            .media_name = "",
-            .audio_info = {},
-        };
-        data->vnode_id = 0;
-
-        StaticPostHooks::virtual_node_args *ph_args_data = new StaticPostHooks::virtual_node_args(); // destroy FIXME:
-
-        ph_args_data->onode_info_ptr = &data->onode_info_ptr;
-        ph_args_data->vnode_id = &data->vnode_id;
-        ph_args_data->state_change_callback = NodesManager::on_state_change_callback;
-
-        ph_args_data->state_change_args =
-            new struct StaticPostHooks::virtual_node_args::state_change_args(); // destory FIXME:
-        ph_args_data->state_change_args->hook_args = new StaticPostHooks::virtual_node_args::state_change_hook_args();
-
-        ph_args_data->state_change_args->callback_args = nullptr; // created through the callbacks
-
-        ph_args_data->state_change_args->hook_args->onode_info_ptr = ph_args_data->onode_info_ptr;
-        ph_args_data->state_change_args->hook_args->vnode_id = &data->vnode_id;
-        ph_args_data->state_change_args->hook_args->sync_data = sync_data;
+        ArgStructs::virtual_node_args *vnode_args = new ArgStructs::virtual_node_args(
+            *loop, process_args->onode, NodesManager::on_state_change_callback_hook, *sync_data); // destroy FIXME:
 
         uint32_t param_ids_sub[] = {SPA_PARAM_Format};
-        pw_node_subscribe_params((struct pw_node *)node, param_ids_sub,
-                                 sizeof(param_ids_sub) / sizeof(param_ids_sub[0]));
+        pw_node_subscribe_params(sync_data->onode, param_ids_sub, sizeof(param_ids_sub) / sizeof(param_ids_sub[0]));
 
-        process_and_ph_args_data *args = new process_and_ph_args_data();
-        args->ph_args_data = ph_args_data;
-        args->process_data = data;
-        pw_proxy_add_object_listener(node, listener, &node_events, args);
+        process_and_vnode_args_data *args = new process_and_vnode_args_data();
+        args->vnode_args = vnode_args;
+        args->process_args = process_args;
+        pw_proxy_add_object_listener((struct pw_proxy *)sync_data->onode, process_args->self_listener, &node_events,
+                                     args);
 
-        pw_node_enum_params((struct pw_node *)node, 0, SPA_PARAM_Format, 0, UINT32_MAX, nullptr);
+        pw_node_enum_params(sync_data->onode, 0, SPA_PARAM_Format, 0, UINT32_MAX, nullptr);
     }
 
-    static void on_global_remove(void *data, uint32_t id) { StoreStates::remove_onode_entry(id); }
+    static void on_global_remove(void *data, uint32_t id) { Stores::remove_vnode_entry(id); }
 };
