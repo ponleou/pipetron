@@ -86,6 +86,7 @@ int main() {
 
     spa_hook_remove(listener);
     delete listener;
+    listener = nullptr;
 
     NodesManager::cleanup();
 
