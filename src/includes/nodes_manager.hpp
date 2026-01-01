@@ -29,6 +29,7 @@ using std::function;
 using std::make_tuple;
 using std::queue;
 using std::string;
+using std::to_string;
 using std::tuple;
 using std::unordered_map;
 using std::vector;
@@ -125,7 +126,7 @@ class Stores {
     inline static unordered_map<uint32_t, Stores::sync_params_data *> onode_to_sync_data = {};
 
     template <typename T>
-    static void remove_onode_entry(uint32_t onode_id, unordered_map<uint32_t, T *> &map) {
+    static void remove_entry_with_onode(uint32_t onode_id, unordered_map<uint32_t, T *> &map) {
         auto it = map.find(onode_id);
 
         if (it != map.end()) {
@@ -133,6 +134,19 @@ class Stores {
             it->second = nullptr;
             map.erase(it);
         }
+    }
+
+    static void log(string msg) {
+        cout << msg << endl;
+    }
+
+    static string get_onode_binary_name(uint32_t onode_id) {
+        auto it = onode_infos.find(onode_id);
+
+        if (it == onode_infos.end() || it->second->app_process_binary == "")
+            return "unknown";
+
+        return it->second->app_process_binary;
     }
 
   public:
@@ -144,10 +158,12 @@ class Stores {
                                 pw_stream *stream) {
 
         onode_to_vnode.emplace(onode_id, new virtual_node_data(vnode_id, context, core, stream));
+        log("Creating replicated node ID " + to_string(vnode_id) + " for node ID " + to_string(onode_id) + " (" +
+            get_onode_binary_name(onode_id) + ")");
     }
 
     static void remove_vnode_entry(uint32_t onode_id) {
-        remove_onode_entry<virtual_node_data>(onode_id, onode_to_vnode);
+        remove_entry_with_onode<virtual_node_data>(onode_id, onode_to_vnode);
     }
 
     static const onode_info &get_onode_info(uint32_t onode_id) {
@@ -158,13 +174,14 @@ class Stores {
 
         if (onode_infos.find(onode_id) == onode_infos.end()) {
             onode_infos[onode_id] = new onode_info(onode_id);
+            log("New pipewire node ID " + to_string(onode_id) + " detected");
         }
 
         return *onode_infos[onode_id];
     }
 
     static void remove_onode_info_entry(uint32_t onode_id) {
-        remove_onode_entry<onode_info>(onode_id, onode_infos);
+        remove_entry_with_onode<onode_info>(onode_id, onode_infos);
     }
 
     static sync_params_data &modify_sync_data_entry(uint32_t onode_id) {
@@ -176,18 +193,26 @@ class Stores {
     }
 
     static void remove_sync_data_entry(uint32_t onode_id) {
-        remove_onode_entry<sync_params_data>(onode_id, onode_to_sync_data);
+        remove_entry_with_onode<sync_params_data>(onode_id, onode_to_sync_data);
+    }
+
+    static void cleanup_entries_with_onode_id(uint32_t onode_id) {
+        log("Cleaning up node ID " + to_string(onode_id) + " (" + get_onode_binary_name(onode_id) + ")");
+
+        Stores::remove_vnode_entry(onode_id);
+        Stores::remove_sync_data_entry(onode_id);
+        Stores::remove_onode_info_entry(onode_id);
     }
 
     static void cleanup() {
         for (const auto &[key, value] : onode_infos)
-            remove_onode_entry(key, onode_infos);
+            remove_entry_with_onode(key, onode_infos);
 
         for (const auto &[key, value] : onode_to_vnode)
-            remove_onode_entry(key, onode_to_vnode);
+            remove_entry_with_onode(key, onode_to_vnode);
 
         for (const auto &[key, value] : onode_to_sync_data)
-            remove_onode_entry(key, onode_to_sync_data);
+            remove_entry_with_onode(key, onode_to_sync_data);
     }
 };
 
@@ -597,9 +622,7 @@ class NodesManager {
     }
 
     static void on_global_remove(void *data, uint32_t id) {
-        Stores::remove_vnode_entry(id);
-        Stores::remove_sync_data_entry(id);
-        Stores::remove_onode_info_entry(id);
+        Stores::cleanup_entries_with_onode_id(id);
     }
 
     static void cleanup() {
