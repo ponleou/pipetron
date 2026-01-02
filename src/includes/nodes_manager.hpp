@@ -11,6 +11,7 @@
 #include "spa/utils/hook.h"
 #include <any>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
 #include <iostream>
 #include <ostream>
@@ -42,12 +43,16 @@ class Stores {
         struct pw_registry *vnode_reg;
         struct pw_node *onode;
         bool ignore_next_onode_event;
-        const spa_pod *param_data;
+        spa_pod *param_data;
         vector<spa_hook *> listeners;
 
         sync_params_data() {
+            this->vnode = nullptr;
+            this->onode = nullptr;
+            this->vnode_reg = nullptr;
             this->param_data = nullptr;
-            this->ignore_next_onode_event = false;
+            this->ignore_next_onode_event = true;
+            this->listeners = {};
         }
 
         ~sync_params_data() {
@@ -73,6 +78,11 @@ class Stores {
             if (this->vnode_reg) {
                 pw_proxy_destroy((pw_proxy *)this->vnode_reg);
                 this->vnode_reg = nullptr;
+            }
+
+            if (this->param_data) {
+                free(this->param_data);
+                this->param_data = nullptr;
             }
         }
     };
@@ -405,9 +415,14 @@ class EventListeners {
         if (id != SPA_PARAM_Props)
             return;
 
-        auto *sync_data = (struct Stores::sync_params_data *)data;
+        auto *sync_data = (Stores::sync_params_data *)data;
 
-        sync_data->param_data = param;
+        if (sync_data->param_data) {
+            free(sync_data->param_data);
+            sync_data->param_data = nullptr;
+        }
+        sync_data->param_data = spa_pod_copy(param);
+
         sync_data->ignore_next_onode_event = true;
         pw_node_set_param(sync_data->onode, SPA_PARAM_Props, 0, sync_data->param_data);
     }
