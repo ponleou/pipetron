@@ -8,6 +8,16 @@ Pipetron (**Pipe**Wire + Elec**tron**, _very creative_) is a bandage fix for Ele
 
 Pipetron's solution is simple: replicate all Electron audio streams with it's actual Electron app name and icons, and make a one-way sync of its volume settings from the replicated stream to its corresponding Electron stream. As a byproduct, WirePlumber saves the replicated streams volume settings, and Pipetron syncs the volume setting to its Electron stream.
 
+## Images
+
+Without Pipetron:
+
+<img src="./img/pavucontrol_without_pipetron.png" alt="pavucontrol without Pipetron" width=45% />
+
+With Pipetron:
+
+<img src="./img/pavucontrol_with_pipetron.png" alt="pavucontrol with Pipetron" width=45% />
+
 ## Installing
 
 ### Arch Linux
