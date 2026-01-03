@@ -1,0 +1,10 @@
+[Unit]
+Description=Electron node manager for Pipewire
+After=pipewire.service
+
+[Service]
+ExecStart=@BINARY_PATH@
+Restart=on-failure
+
+[Install]
+WantedBy=pipewire.service
