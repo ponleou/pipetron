@@ -1,5 +1,5 @@
 [Unit]
-Description=Electron node manager for Pipewire
+Description=Electron node manager for PipeWire
 After=pipewire.service
 
 [Service]
