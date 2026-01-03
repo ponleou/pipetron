@@ -1,3 +1,7 @@
+**[NOTE]** This reposity is mirrored from [Codeberg](https://codeberg.org/ponleou/pipetron).
+
+---
+
 # Pipetron
 
 Pipetron (**Pipe**Wire + Elec**tron**, _very creative_) is a bandage fix for Electron app audio streams with PipeWire. Electron apps have a long-running issue with being unable to change its audio stream names from the permanent "Chromium" name. Though minimal, it creates annoyances such as being unable to differentiate Electron apps within volume controller apps that uses PipeWire's `application.name` (a popular example includes pavucontrol), WirePlumber resetting all Electron apps to the same audio setting, and perhaps more. Pipetron aims to fix the former two.
