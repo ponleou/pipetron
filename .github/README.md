@@ -12,11 +12,11 @@ Pipetron's solution is simple: replicate all Electron audio streams with it's ac
 
 Without Pipetron:
 
-<img src="../img/pavucontrol_without_pipetron.png" alt="pavucontrol without Pipetron" width=45% />
+<img src="../img/pavucontrol_without_pipetron.png" alt="pavucontrol without Pipetron" width=70% />
 
 With Pipetron:
 
-<img src="../img/pavucontrol_with_pipetron.png" alt="pavucontrol with Pipetron" width=45% />
+<img src="../img/pavucontrol_with_pipetron.png" alt="pavucontrol with Pipetron" width=70% />
 
 ## Installing
 
