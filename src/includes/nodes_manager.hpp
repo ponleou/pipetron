@@ -150,13 +150,14 @@ class Stores {
         cout << msg << endl;
     }
 
-    static string get_onode_binary_name(uint32_t onode_id) {
+    static bool get_onode_binary_name(uint32_t onode_id, string &name) {
         auto it = onode_infos.find(onode_id);
 
-        if (it == onode_infos.end() || it->second->app_process_binary == "")
-            return "unknown";
+        if (it == onode_infos.end())
+            return false;
 
-        return it->second->app_process_binary;
+        name = it->second->app_process_binary;
+        return true;
     }
 
   public:
@@ -168,8 +169,12 @@ class Stores {
                                 pw_stream *stream) {
 
         onode_to_vnode.emplace(onode_id, new virtual_node_data(vnode_id, context, core, stream));
-        log("Creating replicated node ID " + to_string(vnode_id) + " for node ID " + to_string(onode_id) + " (" +
-            get_onode_binary_name(onode_id) + ")");
+
+        string onode_name = "";
+        if (get_onode_binary_name(onode_id, onode_name)) {
+            log("Creating replicated node ID " + to_string(vnode_id) + " for node ID " + to_string(onode_id) + " (" +
+                onode_name + ")");
+        }
     }
 
     static void remove_vnode_entry(uint32_t onode_id) {
@@ -207,7 +212,11 @@ class Stores {
     }
 
     static void cleanup_entries_with_onode_id(uint32_t onode_id) {
-        log("Cleaning up node ID " + to_string(onode_id) + " (" + get_onode_binary_name(onode_id) + ")");
+
+        string onode_name = "";
+        if (get_onode_binary_name(onode_id, onode_name)) {
+            log("Cleaning up node ID " + to_string(onode_id) + " (" + onode_name + ")");
+        }
 
         Stores::remove_vnode_entry(onode_id);
         Stores::remove_sync_data_entry(onode_id);
