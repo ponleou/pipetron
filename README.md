@@ -40,7 +40,7 @@ systemctl --user start pipetron.service
 -   `pipewire` and `libpipewire`
 
 ```
-git clone https://codeberg.org/ponleou/pipetron.git
+git clone -b stable --single-branch https://codeberg.org/ponleou/pipetron.git
 cd pipetron
 meson setup build
 meson compile -C build
