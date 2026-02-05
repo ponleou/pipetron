@@ -1,4 +1,7 @@
 CompileFlags:
-  Add:
-    - -I/usr/include/pipewire-0.3
-    - -I/usr/include/spa-0.2
+    Add:
+        - -I/usr/include/pipewire-0.3
+        - -I/usr/include/spa-0.2
+        - -I../../include
+        - -I../include
+        - -I./include
