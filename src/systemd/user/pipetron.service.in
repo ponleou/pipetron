@@ -3,7 +3,7 @@ Description=Electron node manager for PipeWire
 After=pipewire.service
 
 [Service]
-ExecStart=@BINARY_PATH@
+ExecStart=@BINARY_PATH@ -d
 Restart=on-failure
 
 [Install]
