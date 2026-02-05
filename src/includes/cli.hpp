@@ -85,14 +85,10 @@ class CLI {
             cout << "  " << left << setw(maxShortFull + extraGap) << shortFull << flag[Flags::OPTION_INFO::DESC]
                  << endl;
         }
-
-        exit(0);
     }
 
     static void printVersion() {
         cout << PROJECT_NAME << " version " << PROJECT_VERSION << " (" << PROJECT_LICENSE << " License)" << endl;
-
-        exit(0);
     }
 
     static bool checkFlagCondition(const char *arg, unordered_map<Flags::OPTION_INFO, string> option) {
@@ -115,7 +111,9 @@ class CLI {
                 unknownFlag(argv[i]);
         }
 
-        if (argc == 0) {
+        // no flags/options
+        if (argc < 2) {
+            printVersion();
             printHelp();
         }
     }
