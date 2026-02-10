@@ -1,4 +1,5 @@
 #include "includes/cli.hpp"
+#include "includes/audio_daemon.hpp"
 #include "includes/volume_daemon.hpp"
 #include <build.h>
 #include <cstring>
@@ -52,8 +53,12 @@ vector<unordered_map<CLI::Flags::OPTION_INFO, string>> CLI::Flags::options = {
      {CLI::Flags::OPTION_INFO::FULL, "--version"},
      {CLI::Flags::OPTION_INFO::TYPE, ""},
      {CLI::Flags::OPTION_INFO::DESC, "Show version"}},
-    {{CLI::Flags::OPTION_INFO::SHORT, "-d"},
-     {CLI::Flags::OPTION_INFO::FULL, "--daemon"},
+    {{CLI::Flags::OPTION_INFO::SHORT, "-vd"},
+     {CLI::Flags::OPTION_INFO::FULL, "--volume-daemon"},
+     {CLI::Flags::OPTION_INFO::TYPE, ""},
+     {CLI::Flags::OPTION_INFO::DESC, "Start daemon"}},
+    {{CLI::Flags::OPTION_INFO::SHORT, "-ad"},
+     {CLI::Flags::OPTION_INFO::FULL, "--audio_daemon"},
      {CLI::Flags::OPTION_INFO::TYPE, ""},
      {CLI::Flags::OPTION_INFO::DESC, "Start daemon"}},
 };
@@ -67,6 +72,8 @@ void CLI::check_flags(int argc, char *argv[]) {
             print_version();
         } else if (check_flag_condition(argv[i], options[Flags::DAEMON])) {
             VolumeDaemon::start();
+        } else if (check_flag_condition(argv[i], options[Flags::AUDIO])) {
+            AudioDaemon::start();
         } else
             unknown_flag(argv[i]);
     }

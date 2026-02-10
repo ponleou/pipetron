@@ -25,6 +25,8 @@ executable(
     'src/utils.cpp',
     'src/volume_manager.cpp',
     'src/volume_daemon.cpp',
+    'src/audio_manager.cpp',
+    'src/audio_daemon.cpp',
     'src/nodes_manager.cpp',
     include_directories: project_include_dir,
     dependencies: [pipewire_dep],

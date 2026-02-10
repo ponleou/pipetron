@@ -23,6 +23,7 @@ class CLI {
             HELP,
             VERSION,
             DAEMON,
+            AUDIO,
         };
 
         static vector<unordered_map<OPTION_INFO, string>> options;
