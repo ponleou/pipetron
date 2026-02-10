@@ -1,3 +1,6 @@
+Documentation:
+    CommentFormat: Doxygen
+
 CompileFlags:
     Add:
         - -I/usr/include/pipewire-0.3

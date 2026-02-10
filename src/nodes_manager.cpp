@@ -28,7 +28,7 @@ void NodesManager::maybe_run_post_process(nodes_manager_args_data *args) {
     args->self_listener = nullptr;
 
     void *hook_args = args->node_processed_hook_args;
-    NodesManager::create_vnode_args *vnode_args = args->vnode_args;
+    NodesManager::replicate_vnode_args *vnode_args = args->vnode_args;
     args->node_processed_hook_args = nullptr;
     args->vnode_args = nullptr;
     args->post_node_process_hook(vnode_args, hook_args);
@@ -101,8 +101,8 @@ void NodesManager::process_new_node(pw_node *node, nodes_manager_args_data *args
     pw_node_enum_params(node, 0, SPA_PARAM_Format, 0, UINT32_MAX, nullptr);
 }
 
-void NodesManager::create_virtual_node(NodesManager::create_vnode_args &args,
-                                       NodesManager::create_vnode_output &output) {
+void NodesManager::replicate_virtual_node(NodesManager::replicate_vnode_args &args,
+                                          NodesManager::replicate_vnode_output &output) {
 
     struct pw_properties *context_props =
         pw_properties_new(PW_KEY_APP_NAME, args.onode.app_process_binary.c_str(), nullptr);
