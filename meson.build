@@ -12,15 +12,20 @@ project_conf_data.set_quoted('PROJECT_VERSION', project_version)
 project_conf_data.set_quoted('PROJECT_LICENSE', project_license)
 
 configure_file(
-    output: 'config.h',
+    output: 'build.h',
     configuration: project_conf_data,
 )
 
-project_include_dir = include_directories('include')
+project_include_dir = include_directories('build_include')
 
 executable(
     'pipetron',
     'src/main.cpp',
+    'src/cli.cpp',
+    'src/utils.cpp',
+    'src/volume_manager.cpp',
+    'src/volume_daemon.cpp',
+    'src/nodes_manager.cpp',
     include_directories: project_include_dir,
     dependencies: [pipewire_dep],
     install: true,
