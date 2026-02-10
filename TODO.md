@@ -17,3 +17,8 @@ for input onodes:
 other:
 
 - [ ] config file to determine daemon mode to start
+
+- creating nodes be:
+    - create_vnode_args should have optional strings for the other fields
+    - replicate_vnode function shoudl read teh optional, if empty, use the onode values
+    - ensures it always uses the correct audio setting

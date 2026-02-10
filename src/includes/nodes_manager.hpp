@@ -19,15 +19,17 @@ class NodesManager {
     /**
      * Stores metadata gathered from an original PipeWire node.
      *
-     * @param id                   The PipeWire node ID.
-     * @param app_process_binary   The binary name of the application owning this node.
-     * @param media_class          The media class (e.g. "Stream/Output/Audio").
-     * @param media_name           The media name (e.g. the stream title).
-     * @param audio_info           The raw audio format info (channels, rate, format) parsed from SPA_PARAM_Format.
+     * @param id                    The PipeWire node ID.
+     * @param app_process_binary    The binary name of the application owning this node.
+     * @param node_description      The node description
+     * @param media_class           The media class (e.g. "Stream/Output/Audio").
+     * @param media_name            The media name (e.g. the stream title).
+     * @param audio_info            The raw audio format info (channels, rate, format) parsed from SPA_PARAM_Format.
      */
     struct onode_info {
         const uint32_t id;
         string app_process_binary;
+        string node_description;
         string media_class;
         string media_name;
         spa_audio_info_raw audio_info;
@@ -207,5 +209,7 @@ class NodesManager {
      * @param args      Input args provided inside `post_node_process_hook`.
      * @param output    Output struct populated with the created stream, context, and core.
      */
-    static void replicate_virtual_node(replicate_vnode_args &args, replicate_vnode_output &output);
+    static void replicate_vnode_binary_name(replicate_vnode_args &args, replicate_vnode_output &output);
+
+    static void replicate_vnode_node_desc(replicate_vnode_args &args, replicate_vnode_output &output);
 };

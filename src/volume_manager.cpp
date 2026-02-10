@@ -217,7 +217,7 @@ void *VolumeManager::post_node_process_hook(NodesManager::replicate_vnode_args *
     auto *onode_id = (uint32_t *)data;
 
     NodesManager::replicate_vnode_output output;
-    NodesManager::replicate_virtual_node(*vnode_args, output);
+    NodesManager::replicate_vnode_binary_name(*vnode_args, output);
     delete vnode_args;
     vnode_args = nullptr;
 

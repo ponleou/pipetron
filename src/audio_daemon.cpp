@@ -1,9 +1,9 @@
 #include "includes/audio_daemon.hpp"
 #include "includes/audio_manager.hpp"
 #include "includes/utils.hpp"
-#include "pipewire/device.h"
 #include "pipewire/keys.h"
 #include "pipewire/pipewire.h"
+#include <build.h>
 #include <iostream>
 
 struct AudioDaemon::registry_event_global_data {
@@ -22,18 +22,21 @@ void AudioDaemon::reg_event_find_chromium_and_mic_nodes(void *data, uint32_t id,
         bool isMic = false;
         for (uint32_t i = 0; i < props->n_items; i++) {
 
-            // find microphone
-            if (strcmp(props->items[i].key, PW_KEY_NODE_DESCRIPTION) == 0) {
-                name = props->items[i].value;
-            }
+            if (!(strcmp(props->items[i].value, "Audio/Source") == 0 ||
+                  strcmp(props->items[i].value, "Audio/Source/Virtual") == 0))
+
+                // find microphone
+                if (strcmp(props->items[i].key, PW_KEY_NODE_DESCRIPTION) == 0) {
+                    name = props->items[i].value;
+                }
 
             if (strcmp(props->items[i].key, PW_KEY_MEDIA_CLASS) != 0)
                 continue;
 
             if (strcmp(props->items[i].value, "Audio/Source") == 0 ||
                 strcmp(props->items[i].value, "Audio/Source/Virtual") == 0) {
+
                 isMic = true;
-                // AudioManager::process_new_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id, type);
             }
             // END FIND MIC
 
@@ -47,15 +50,17 @@ void AudioDaemon::reg_event_find_chromium_and_mic_nodes(void *data, uint32_t id,
                 // VolumeManager::process_new_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id, type);
             }
             // END FIND ELECTRON NODES
-
-            break;
-
             break;
         }
 
         // print microphone info
         if (isMic) {
-            std::cout << name << std::endl;
+            std::cout << "name: " << name << std::endl;
+            if (name.find(PROJECT_NAME) == string::npos) {
+                std::cout << " processing";
+                AudioManager::process_new_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id, type);
+            }
+            std::cout << std::endl;
         }
     }
 }
