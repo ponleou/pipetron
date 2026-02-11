@@ -225,24 +225,24 @@ class VolumeStores {
         friend class VolumeManager;
 
         /**
-         * Provides the reference to the `vnode_data` entry for `onode_id` key. If the entry does not exist, the entry
-         * will be created lazily.
+         * Provides the reference to the `onode_to_vnode_data` map entry for `onode_id` key. If the entry does not
+         * exist, the entry will be created lazily.
          *
          * @return reference to the `vnode_data` entry for `onode_id` key.
          */
         static vnode_data &get_modifiable_vnode_data(uint32_t onode_id);
 
         /**
-         * Provides the reference to the `onode_info` entry for `onode_id` key. If the entry does not exist, the entry
-         * will be created lazily.
+         * Provides the reference to the `onode_infos` map entry for `onode_id` key. If the entry does not exist, the
+         * entry will be created lazily.
          *
          * @return reference to the `onode_info` entry for `onode_id` key.
          */
         static NodesManager::onode_info &get_modifiable_onode_info(uint32_t onode_id);
 
         /**
-         * Provides the reference to the `sync_params_data` entry for `onode_id` key. If the entry does not exist, the
-         * entry will be created lazily.
+         * Provides the reference to the `onode_to_sync_params_data` map entry for `onode_id` key. If the entry does not
+         * exist, the entry will be created lazily.
          *
          * @return reference to the `sync_params_data` entry for `onode_id` key.
          */
