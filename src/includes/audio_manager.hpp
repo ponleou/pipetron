@@ -178,6 +178,7 @@ class AudioStores {
     };
 
   private:
+    static unordered_map<uint32_t, NodesManager::onode_info *> omic_infos;
     static unordered_map<uint32_t, NodesManager::onode_info *> onode_infos;
     static unordered_map<uint32_t, AudioStores::vnode_data *> onode_to_vnode_data;
     static unordered_map<uint32_t, AudioStores::sync_params_data *> onode_to_sync_params_data;
@@ -213,24 +214,32 @@ class AudioStores {
         friend class AudioManager;
 
         /**
-         * Provides the reference to the `vnode_data` entry for `onode_id` key. If the entry does not exist, the entry
-         * will be created lazily.
+         * Provides the reference to the `onode_to_vnode_data` map entry for `onode_id` key. If the entry does not
+         * exist, the entry will be created lazily.
          *
          * @return reference to the `vnode_data` entry for `onode_id` key.
          */
         static vnode_data &get_modifiable_vnode_data(uint32_t onode_id);
 
         /**
-         * Provides the reference to the `onode_info` entry for `onode_id` key. If the entry does not exist, the entry
-         * will be created lazily.
+         * Provides the reference to the `onode_infos` map entry for `onode_id` key. If the entry does not exist, the
+         * entry will be created lazily.
          *
          * @return reference to the `onode_info` entry for `onode_id` key.
          */
         static NodesManager::onode_info &get_modifiable_onode_info(uint32_t onode_id);
 
         /**
-         * Provides the reference to the `sync_params_data` entry for `onode_id` key. If the entry does not exist, the
+         * Provides the reference to the `omic_infos` map entry for `onode_id` key. If the entry does not exist, the
          * entry will be created lazily.
+         *
+         * @return reference to the `onode_info` entry for `onode_id` key.
+         */
+        static NodesManager::onode_info &get_modifiable_omic_info(uint32_t onode_id);
+
+        /**
+         * Provides the reference to the `onode_to_sync_params_data` map entry for `onode_id` key. If the entry does not
+         * exist, the entry will be created lazily.
          *
          * @return reference to the `sync_params_data` entry for `onode_id` key.
          */
@@ -241,7 +250,7 @@ class AudioStores {
          *
          * @param onode_id Key to delete all data entries from all maps
          */
-        static void cleanup_entries_with_onode_id(uint32_t onode_id);
+        static void cleanup_elec_node_entries_with_onode_id(uint32_t onode_id);
 
         /**
          * Deletes and clears all entries in every map in `AudioStores`.
@@ -264,7 +273,19 @@ class AudioManager {
      * `NodesManager::replicate_virtual_node`
      * @param data The pointer to the data from `NodesManager::process_new_node` 's post hook arguments
      */
-    static void *post_node_process_hook(NodesManager::replicate_vnode_args *vnode_args, void *data);
+    static void *post_elec_node_process_hook(NodesManager::replicate_vnode_args *vnode_args, void *data);
+
+    /**
+     * Hook called after `NodesManager::process_mic_node`
+     *
+     * It calls `NodesManager::replicate_vnode` and continues with next steps to set up the virtual node, which
+     * includes calling a `state_changed` callback and hook
+     *
+     * @param vnode_args Passed by `NodesManager::process_new_node` which is specifically used to call
+     * `NodesManager::replicate_virtual_node`
+     * @param data The pointer to the data from `NodesManager::process_new_node` 's post hook arguments
+     */
+    static void *post_mic_process_hook(NodesManager::replicate_vnode_args *vnode_args, void *data);
 
   public:
     /**
@@ -277,7 +298,19 @@ class AudioManager {
      * @param id    The PipeWire global ID of the new node.
      * @param type  The PipeWire type string of the global (e.g. PipeWire:Interface:Node).
      */
-    static void process_new_node(pw_registry *reg, pw_loop *loop, uint32_t id, const char *type);
+    static void process_elec_node(pw_registry *reg, pw_loop *loop, uint32_t id, const char *type);
+
+    /**
+     * Entry point when a new PipeWire global node appears. Binds the original node from the registry and initiates
+     * processing via NodesManager, which will gather node metadata and create a matching virtual node. Process
+     * continues with setting up `vnode` and the syncing process.
+     *
+     * @param reg   The PipeWire registry the node was discovered in.
+     * @param loop  The PipeWire main loop, used for the virtual node's context.
+     * @param id    The PipeWire global ID of the new node.
+     * @param type  The PipeWire type string of the global (e.g. PipeWire:Interface:Node).
+     */
+    static void process_mic_node(pw_registry *reg, pw_loop *loop, uint32_t id, const char *type);
 
     /**
      * Registry global-remove callback. Cleans up all stored data from `AudioStores` associated with the removed node

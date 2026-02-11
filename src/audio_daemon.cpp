@@ -18,49 +18,41 @@ void AudioDaemon::reg_event_find_chromium_and_mic_nodes(void *data, uint32_t id,
 
     if (strcmp(type, PW_TYPE_INTERFACE_Node) == 0) {
 
-        string name = "";
+        string micName = "";
         bool isMic = false;
         for (uint32_t i = 0; i < props->n_items; i++) {
 
-            if (!(strcmp(props->items[i].value, "Audio/Source") == 0 ||
-                  strcmp(props->items[i].value, "Audio/Source/Virtual") == 0))
+            // find microphone
+            if (micName != "" && isMic)
+                break;
 
-                // find microphone
-                if (strcmp(props->items[i].key, PW_KEY_NODE_DESCRIPTION) == 0) {
-                    name = props->items[i].value;
-                }
-
-            if (strcmp(props->items[i].key, PW_KEY_MEDIA_CLASS) != 0)
-                continue;
-
-            if (strcmp(props->items[i].value, "Audio/Source") == 0 ||
-                strcmp(props->items[i].value, "Audio/Source/Virtual") == 0) {
-
+            if (strcmp(props->items[i].key, PW_KEY_NODE_DESCRIPTION) == 0) {
+                micName = props->items[i].value;
+            }
+            if (strcmp(props->items[i].key, PW_KEY_MEDIA_CLASS) == 0 &&
+                (strcmp(props->items[i].value, "Audio/Source") == 0 ||
+                 strcmp(props->items[i].value, "Audio/Source/Virtual") == 0)) {
                 isMic = true;
             }
             // END FIND MIC
 
             // find electron nodes
-            if (strcmp(props->items[i].key, PW_KEY_APP_NAME) != 0)
-                continue;
+            if (strcmp(props->items[i].key, PW_KEY_APP_NAME) == 0 &&
+                (strcmp(props->items[i].value, "Chromium") == 0 ||
+                 strcmp(props->items[i].value, "Chromium input") == 0)) {
 
-            if (strcmp(props->items[i].value, "Chromium") == 0 ||
-                strcmp(props->items[i].value, "Chromium input") == 0) {
-
-                // VolumeManager::process_new_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id, type);
+                // process electron node
+                AudioManager::process_elec_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id, type);
+                break;
             }
             // END FIND ELECTRON NODES
-            break;
         }
 
-        // print microphone info
+        // process microphone
         if (isMic) {
-            std::cout << "name: " << name << std::endl;
-            if (name.find(PROJECT_NAME) == string::npos) {
-                std::cout << " processing";
-                AudioManager::process_new_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id, type);
+            if (micName.find(PROJECT_NAME) == string::npos) {
+                AudioManager::process_mic_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id, type);
             }
-            std::cout << std::endl;
         }
     }
 }
@@ -71,29 +63,29 @@ void AudioDaemon::start() {
     pw_init(nullptr, nullptr);
 
     // getting context to connect to pipewire daemon
-    struct pw_main_loop *loop = pw_main_loop_new(nullptr);
-    struct pw_context *context = pw_context_new(pw_main_loop_get_loop(loop), nullptr, 0);
+    pw_main_loop *loop = pw_main_loop_new(nullptr);
+    pw_context *context = pw_context_new(pw_main_loop_get_loop(loop), nullptr, 0);
 
     // connect context to daemon
-    struct pw_core *core = pw_context_connect(context, nullptr, 0);
+    pw_core *core = pw_context_connect(context, nullptr, 0);
     Utils::raise_error(core == nullptr, string("failed to connect to pipewire daemon, ") + strerror(errno), errno);
 
-    struct pw_registry *registry = pw_core_get_registry(core, PW_VERSION_REGISTRY, 0);
+    pw_registry *registry = pw_core_get_registry(core, PW_VERSION_REGISTRY, 0);
 
-    struct spa_hook *listener = new spa_hook();
+    spa_hook *listener = new spa_hook();
 
-    static const struct pw_registry_events registry_events = {
+    static const pw_registry_events registry_events = {
         .version = PW_VERSION_REGISTRY_EVENTS,
         .global = reg_event_find_chromium_and_mic_nodes,
-        // .global_remove = AudioManager::on_global_remove,
+        .global_remove = AudioManager::on_global_remove,
     };
 
-    struct AudioDaemon::registry_event_global_data reg_data = {loop, registry};
+    AudioDaemon::registry_event_global_data reg_data = {loop, registry};
     pw_registry_add_listener(registry, listener, &registry_events, &reg_data);
 
     pw_main_loop_run(loop);
 
-    pw_proxy_destroy((struct pw_proxy *)registry);
+    pw_proxy_destroy((pw_proxy *)registry);
     pw_core_disconnect(core);
     pw_context_destroy(context);
     pw_main_loop_destroy(loop);
@@ -102,5 +94,5 @@ void AudioDaemon::start() {
     delete listener;
     listener = nullptr;
 
-    // AudioManager::cleanup();
+    AudioManager::cleanup();
 }
