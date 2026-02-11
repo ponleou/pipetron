@@ -15,23 +15,33 @@ using std::vector;
  * Provides common node managament functions for other managers.
  */
 class NodesManager {
+  private:
+    /**
+     * Contains string description of node
+     *
+     * @param app_process_binary    The binary name of the application owning this node.
+     * @param node_description      The node description
+     * @param media_class           The media class (e.g. "Stream/Output/Audio").
+     * @param media_name            The media name (e.g. the stream title).
+     */
+    struct node_desc {
+        string app_name;
+        string app_icon_name;
+        string app_process_binary;
+        string node_description;
+        string media_class;
+        string media_name;
+    };
+
   public:
     /**
      * Stores metadata gathered from an original PipeWire node.
      *
      * @param id                    The PipeWire node ID.
-     * @param app_process_binary    The binary name of the application owning this node.
-     * @param node_description      The node description
-     * @param media_class           The media class (e.g. "Stream/Output/Audio").
-     * @param media_name            The media name (e.g. the stream title).
      * @param audio_info            The raw audio format info (channels, rate, format) parsed from SPA_PARAM_Format.
      */
-    struct onode_info {
+    struct onode_info : node_desc {
         const uint32_t id;
-        string app_process_binary;
-        string node_description;
-        string media_class;
-        string media_name;
         spa_audio_info_raw audio_info;
 
         onode_info(uint32_t id) : id(id) {
@@ -43,12 +53,15 @@ class NodesManager {
     /**
      * Input arguments for `NodesManager::replicate_virtual_node`.
      *
-     * @param loop  The PipeWire main loop the virtual node's context will run on.
-     * @param onode The original node's metadata used to replicate its properties.
+     * @param loop          The PipeWire main loop the virtual node's context will run on.
+     * @param onode         The original node's metadata used to replicate its properties.
+     * @param override_desc Optional node descriptions that will override `onode` 's metadata when replicating
+     * properties.
      */
     struct replicate_vnode_args {
         pw_loop &loop;
-        const NodesManager::onode_info &onode;
+        const onode_info &onode;
+        node_desc override_desc;
 
         replicate_vnode_args(pw_loop &loop, const NodesManager::onode_info &onode) : loop(loop), onode(onode) {
         }
@@ -209,7 +222,7 @@ class NodesManager {
      * @param args      Input args provided inside `post_node_process_hook`.
      * @param output    Output struct populated with the created stream, context, and core.
      */
-    static void replicate_vnode_binary_name(replicate_vnode_args &args, replicate_vnode_output &output);
+    static void replicate_vnode(const replicate_vnode_args &args, replicate_vnode_output &output);
 
-    static void replicate_vnode_node_desc(replicate_vnode_args &args, replicate_vnode_output &output);
+    // static void replicate_vnode_node_desc(const replicate_vnode_args &args, replicate_vnode_output &output);
 };

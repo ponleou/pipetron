@@ -7,6 +7,7 @@
 #include "spa/param/param.h"
 #include "spa/pod/builder.h"
 #include "spa/utils/hook.h"
+#include <build.h>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -217,7 +218,10 @@ void *VolumeManager::post_node_process_hook(NodesManager::replicate_vnode_args *
     auto *onode_id = (uint32_t *)data;
 
     NodesManager::replicate_vnode_output output;
-    NodesManager::replicate_vnode_binary_name(*vnode_args, output);
+    vnode_args->override_desc.app_name = vnode_args->onode.app_process_binary;
+    vnode_args->override_desc.app_icon_name = vnode_args->onode.app_process_binary;
+    vnode_args->override_desc.media_name = string(PROJECT_NAME) + " " + vnode_args->onode.media_name;
+    NodesManager::replicate_vnode(*vnode_args, output);
     delete vnode_args;
     vnode_args = nullptr;
 
