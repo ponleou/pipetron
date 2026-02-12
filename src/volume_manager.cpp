@@ -23,7 +23,7 @@ using std::string;
 using std::to_string;
 using std::unordered_map;
 
-unordered_map<uint32_t, NodesManager::onode_info *> VolumeStores::onode_infos = {};
+unordered_map<uint32_t, NodesManager::node_info *> VolumeStores::onode_infos = {};
 unordered_map<uint32_t, VolumeStores::vnode_data *> VolumeStores::onode_to_vnode_data = {};
 unordered_map<uint32_t, VolumeStores::sync_params_data *> VolumeStores::onode_to_sync_params_data = {};
 
@@ -60,10 +60,10 @@ VolumeStores::vnode_data &VolumeStores::FriendAccessor::get_modifiable_vnode_dat
     return *onode_to_vnode_data[onode_id];
 }
 
-NodesManager::onode_info &VolumeStores::FriendAccessor::get_modifiable_onode_info(uint32_t onode_id) {
+NodesManager::node_info &VolumeStores::FriendAccessor::get_modifiable_onode_info(uint32_t onode_id) {
 
     if (onode_infos.find(onode_id) == onode_infos.end()) {
-        onode_infos[onode_id] = new NodesManager::onode_info(onode_id);
+        onode_infos[onode_id] = new NodesManager::node_info(onode_id);
         log("New pipewire node ID " + to_string(onode_id) + " detected");
     }
 
@@ -85,14 +85,14 @@ void VolumeStores::FriendAccessor::cleanup_entries_with_onode_id(uint32_t onode_
         log("Cleaning up node ID " + to_string(onode_id) + " (" + onode_name + ")");
     }
 
-    remove_entry_with_onode<NodesManager::onode_info>(onode_id, onode_infos);
+    remove_entry_with_onode<NodesManager::node_info>(onode_id, onode_infos);
     remove_entry_with_onode<vnode_data>(onode_id, onode_to_vnode_data);
     remove_entry_with_onode<sync_params_data>(onode_id, onode_to_sync_params_data);
 }
 
 void VolumeStores::FriendAccessor::cleanup() {
     for (const auto &[key, value] : onode_infos)
-        remove_entry_with_onode<NodesManager::onode_info>(key, onode_infos);
+        remove_entry_with_onode<NodesManager::node_info>(key, onode_infos);
 
     for (const auto &[key, value] : onode_to_vnode_data)
         remove_entry_with_onode<vnode_data>(key, onode_to_vnode_data);
@@ -213,11 +213,11 @@ void VolumeManager::on_state_change_single_callback(void *data, enum pw_stream_s
     }
 }
 
-void *VolumeManager::post_node_process_hook(NodesManager::replicate_vnode_args *vnode_args, void *data) {
+void *VolumeManager::post_node_process_hook(NodesManager::create_node_args *vnode_args, void *data) {
 
     auto *onode_id = (uint32_t *)data;
 
-    NodesManager::replicate_vnode_output output;
+    NodesManager::create_node_output output;
     vnode_args->override_desc.app_name = vnode_args->onode.app_process_binary;
     vnode_args->override_desc.app_icon_name = vnode_args->onode.app_process_binary;
     vnode_args->override_desc.media_name = string(PROJECT_NAME) + " " + vnode_args->onode.media_name;

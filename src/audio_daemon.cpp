@@ -4,7 +4,6 @@
 #include "pipewire/keys.h"
 #include "pipewire/pipewire.h"
 #include <build.h>
-#include <iostream>
 
 struct AudioDaemon::registry_event_global_data {
     struct pw_main_loop *main_loop;
@@ -16,30 +15,39 @@ void AudioDaemon::reg_event_find_chromium_and_mic_nodes(void *data, uint32_t id,
 
     auto *reg_data = (struct registry_event_global_data *)data;
 
+    if (strcmp(type, PW_TYPE_INTERFACE_Port) == 0) {
+        AudioManager::enlist_registry_port_event(id, props);
+    }
+
     if (strcmp(type, PW_TYPE_INTERFACE_Node) == 0) {
 
-        string micName = "";
-        bool isMic = false;
+        string source_or_sink_name = "";
+        bool is_source_or_sink = false;
         for (uint32_t i = 0; i < props->n_items; i++) {
 
             // find microphone
-            if (micName != "" && isMic)
+            if (source_or_sink_name != "" && is_source_or_sink)
                 break;
 
             if (strcmp(props->items[i].key, PW_KEY_NODE_DESCRIPTION) == 0) {
-                micName = props->items[i].value;
+                source_or_sink_name = props->items[i].value;
             }
             if (strcmp(props->items[i].key, PW_KEY_MEDIA_CLASS) == 0 &&
                 (strcmp(props->items[i].value, "Audio/Source") == 0 ||
-                 strcmp(props->items[i].value, "Audio/Source/Virtual") == 0)) {
-                isMic = true;
+                 strcmp(props->items[i].value, "Audio/Source/Virtual") == 0
+                 //  ||
+                 //  strcmp(props->items[i].value, "Audio/Sink") == 0 ||
+                 //  strcmp(props->items[i].value, "Audio/Sink/Virtual") == 0
+                 )) {
+                is_source_or_sink = true;
             }
             // END FIND MIC
 
             // find electron nodes
             if (strcmp(props->items[i].key, PW_KEY_APP_NAME) == 0 &&
-                (strcmp(props->items[i].value, "Chromium") == 0 ||
-                 strcmp(props->items[i].value, "Chromium input") == 0)) {
+                (strcmp(props->items[i].value, "Chromium") == 0
+                 // ||strcmp(props->items[i].value, "Chromium input") == 0
+                 )) {
 
                 // process electron node
                 AudioManager::process_elec_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id, type);
@@ -49,12 +57,16 @@ void AudioDaemon::reg_event_find_chromium_and_mic_nodes(void *data, uint32_t id,
         }
 
         // process microphone
-        if (isMic) {
-            if (micName.find(PROJECT_NAME) == string::npos) {
-                AudioManager::process_mic_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id, type);
+        if (is_source_or_sink) {
+            if (source_or_sink_name.find(PROJECT_NAME) == string::npos) {
+                // AudioManager::process_mic_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id, type);
             }
         }
     }
+}
+
+void AudioDaemon::on_global_remove(void *data, uint32_t id) {
+    AudioManager::enlist_registry_node_remove_event(id);
 }
 
 void AudioDaemon::start() {
@@ -77,7 +89,7 @@ void AudioDaemon::start() {
     static const pw_registry_events registry_events = {
         .version = PW_VERSION_REGISTRY_EVENTS,
         .global = reg_event_find_chromium_and_mic_nodes,
-        .global_remove = AudioManager::on_global_remove,
+        .global_remove = on_global_remove,
     };
 
     AudioDaemon::registry_event_global_data reg_data = {loop, registry};

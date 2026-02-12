@@ -3,6 +3,7 @@
 #include "nodes_manager.hpp"
 #include "pipewire/stream.h"
 #include <array>
+#include <cstdint>
 #include <spa/param/audio/format-utils.h>
 #include <string>
 #include <unordered_map>
@@ -12,60 +13,6 @@ using std::array;
 using std::string;
 using std::unordered_map;
 using std::vector;
-
-class AudioManagerArgs {
-  private:
-    friend class AudioManager;
-
-    /**
-     * Arguments for `AudioManager::post_state_process_hook`
-     *
-     * @param onode_id Used to access `vnode_data`, and modify `sync_params_data` within AudioStores
-     */
-    struct post_state_process_hook_args {
-        const uint32_t onode_id;
-
-        post_state_process_hook_args(const uint32_t onode_id) : onode_id(onode_id) {
-        }
-    };
-
-    /**
-     * Arguments for `AudioManager::on_state_change_single_callback`.
-     *
-     * @param onode_id                          The original node ID.
-     * @param stream_processed_flag             A boolean flag to check whether the single callback has been processed.
-     * @param self_listener                     The `spa_hook` listener for `on_state_change_single_callback`,
-     * automatically removed within the callback once processed.
-     * @param post_state_process_hook         A hook function called after the the single callback is processed.
-     * @param post_state_process_hook_args    The arguments passed as data into `post_state_process_hook`.
-     */
-    struct state_change_single_callback_args {
-        const uint32_t onode_id;
-        bool stream_processed_flag;
-
-        spa_hook *self_listener;
-
-        void *(*post_state_process_hook)(void *args);
-        void *post_state_process_hook_args;
-
-        state_change_single_callback_args(const uint32_t onode_id, void *(*post_state_process_hook)(void *args),
-                                          void *post_state_process_hook_args)
-            : onode_id(onode_id) {
-            this->stream_processed_flag = false;
-            this->self_listener = new spa_hook();
-            this->post_state_process_hook = post_state_process_hook;
-            this->post_state_process_hook_args = post_state_process_hook_args;
-        }
-
-        ~state_change_single_callback_args() {
-            if (this->self_listener) {
-                spa_hook_remove(this->self_listener);
-                delete this->self_listener;
-                this->self_listener = nullptr;
-            }
-        }
-    };
-};
 
 /**
  * Stores essential information used by `AudioManager` inside three maps keyed by `onode_id`:
@@ -78,66 +25,6 @@ class AudioManagerArgs {
  */
 class AudioStores {
   public:
-    /**
-     * Contains data required to sync Audio data between onode and vnode
-     *
-     * @param vnode_reg               vnode's registry, required to maintain accessibility of `vnode`
-     * @param vnode                   pw_node of vnode, used to read and copy Audio data to `param_data`
-     * @param onode                   pw_node of onode, used to set Audio data from `param_data`
-     * @param ignore_next_onode_event Flag to prevent event callback loop when onode's Audio data is modified
-     * @param param_data              Contains Audio data from `vnode`
-     * @param listeners               Maintains `onode` and `vnode` 's `param_changed` event listeners for cleanup.
-     */
-    struct sync_params_data {
-        pw_registry *vnode_reg;
-        pw_node *vnode;
-
-        pw_node *onode;
-        bool ignore_next_onode_event;
-        spa_pod *param_data;
-        array<spa_hook *, 2> listeners;
-
-        sync_params_data() {
-            this->vnode = nullptr;
-            this->onode = nullptr;
-            this->vnode_reg = nullptr;
-            this->param_data = nullptr;
-            this->ignore_next_onode_event = true;
-            this->listeners = {};
-        }
-
-        ~sync_params_data() {
-            for (spa_hook *listener : this->listeners) {
-                if (listener) {
-                    spa_hook_remove(listener);
-                    delete listener;
-                    listener = nullptr;
-                }
-            }
-            this->listeners.fill(nullptr);
-
-            if (this->vnode) {
-                pw_proxy_destroy((pw_proxy *)this->vnode);
-                this->vnode = nullptr;
-            }
-
-            if (this->onode) {
-                pw_proxy_destroy((pw_proxy *)this->onode);
-                this->onode = nullptr;
-            }
-
-            if (this->vnode_reg) {
-                pw_proxy_destroy((pw_proxy *)this->vnode_reg);
-                this->vnode_reg = nullptr;
-            }
-
-            if (this->param_data) {
-                free(this->param_data);
-                this->param_data = nullptr;
-            }
-        }
-    };
-
     /**
      * Contains the data of `vnode` to maintain the node's instance (context, core, stream, id)
      *
@@ -178,19 +65,19 @@ class AudioStores {
     };
 
   private:
-    static unordered_map<uint32_t, NodesManager::onode_info *> omic_infos;
-    static unordered_map<uint32_t, NodesManager::onode_info *> onode_infos;
-    static unordered_map<uint32_t, AudioStores::vnode_data *> onode_to_vnode_data;
-    static unordered_map<uint32_t, AudioStores::sync_params_data *> onode_to_sync_params_data;
+    static unordered_map<uint32_t, NodesManager::node_info *> omic_infos;
 
+    static unordered_map<uint32_t, NodesManager::node_info *> onode_infos;
+    static unordered_map<uint32_t, AudioStores::vnode_data *> onode_to_vnode_data;
+    static unordered_map<uint32_t, AudioStores::vnode_data *> onode_to_capture_node_data;
     /**
-     * Removes and deletes the entry for `onode_id` from the given map, if present.
+     * Removes and deletes the entry for `node_id` from the given map, if present.
      *
-     * @param onode_id  The `onode_id` entry to delete from the map
+     * @param node_id  The `onode_id` entry to delete from the map
      * @param map       The map to remove the entry from
      */
     template <typename T>
-    static void remove_entry_with_onode(uint32_t onode_id, unordered_map<uint32_t, T *> &map);
+    static void remove_entry_with_node_id(uint32_t node_id, unordered_map<uint32_t, T *> &map);
 
     static void log(string msg);
 
@@ -221,13 +108,15 @@ class AudioStores {
          */
         static vnode_data &get_modifiable_vnode_data(uint32_t onode_id);
 
+        static vnode_data &get_modifiable_capture_node_data(uint32_t onode_id);
+
         /**
          * Provides the reference to the `onode_infos` map entry for `onode_id` key. If the entry does not exist, the
          * entry will be created lazily.
          *
          * @return reference to the `onode_info` entry for `onode_id` key.
          */
-        static NodesManager::onode_info &get_modifiable_onode_info(uint32_t onode_id);
+        static NodesManager::node_info &get_modifiable_onode_info(uint32_t onode_id);
 
         /**
          * Provides the reference to the `omic_infos` map entry for `onode_id` key. If the entry does not exist, the
@@ -235,15 +124,7 @@ class AudioStores {
          *
          * @return reference to the `onode_info` entry for `onode_id` key.
          */
-        static NodesManager::onode_info &get_modifiable_omic_info(uint32_t onode_id);
-
-        /**
-         * Provides the reference to the `onode_to_sync_params_data` map entry for `onode_id` key. If the entry does not
-         * exist, the entry will be created lazily.
-         *
-         * @return reference to the `sync_params_data` entry for `onode_id` key.
-         */
-        static sync_params_data &get_modifiable_sync_params_data(uint32_t onode_id);
+        static NodesManager::node_info &get_modifiable_omic_info(uint32_t onode_id);
 
         /**
          * Deletes and removes all data entries within all maps from `AudioStores` connected with `onode_id`.
@@ -273,7 +154,7 @@ class AudioManager {
      * `NodesManager::replicate_virtual_node`
      * @param data The pointer to the data from `NodesManager::process_new_node` 's post hook arguments
      */
-    static void *post_elec_node_process_hook(NodesManager::replicate_vnode_args *vnode_args, void *data);
+    static void *post_elec_node_process_hook(NodesManager::create_node_args *vnode_args, void *data);
 
     /**
      * Hook called after `NodesManager::process_mic_node`
@@ -285,9 +166,13 @@ class AudioManager {
      * `NodesManager::replicate_virtual_node`
      * @param data The pointer to the data from `NodesManager::process_new_node` 's post hook arguments
      */
-    static void *post_mic_process_hook(NodesManager::replicate_vnode_args *vnode_args, void *data);
+    static void *post_mic_process_hook(NodesManager::create_node_args *vnode_args, void *data);
+
+    static void connect_capture_to_elec_node(const uint32_t elec_node_id, pw_loop &loop);
 
   public:
+    static void enlist_registry_port_event(const uint32_t id, const struct spa_dict *props);
+
     /**
      * Entry point when a new PipeWire global node appears. Binds the original node from the registry and initiates
      * processing via NodesManager, which will gather node metadata and create a matching virtual node. Process
@@ -316,7 +201,7 @@ class AudioManager {
      * Registry global-remove callback. Cleans up all stored data from `AudioStores` associated with the removed node
      * ID.
      */
-    static void on_global_remove(void *data, uint32_t id);
+    static void enlist_registry_node_remove_event(uint32_t id);
 
     /** Cleans up all entries in AudioStores. Call on shutdown. */
     static void cleanup();

@@ -190,7 +190,7 @@ class VolumeStores {
     };
 
   private:
-    static unordered_map<uint32_t, NodesManager::onode_info *> onode_infos;
+    static unordered_map<uint32_t, NodesManager::node_info *> onode_infos;
     static unordered_map<uint32_t, VolumeStores::vnode_data *> onode_to_vnode_data;
     static unordered_map<uint32_t, VolumeStores::sync_params_data *> onode_to_sync_params_data;
 
@@ -238,7 +238,7 @@ class VolumeStores {
          *
          * @return reference to the `onode_info` entry for `onode_id` key.
          */
-        static NodesManager::onode_info &get_modifiable_onode_info(uint32_t onode_id);
+        static NodesManager::node_info &get_modifiable_onode_info(uint32_t onode_id);
 
         /**
          * Provides the reference to the `onode_to_sync_params_data` map entry for `onode_id` key. If the entry does not
@@ -279,7 +279,7 @@ class VolumeManager {
      * `NodesManager::replicate_virtual_node`
      * @param data The pointer to the data from `NodesManager::process_new_node` 's post hook arguments
      */
-    static void *post_node_process_hook(NodesManager::replicate_vnode_args *vnode_args, void *data);
+    static void *post_node_process_hook(NodesManager::create_node_args *vnode_args, void *data);
 
     /**
      * A one-shot single callback for PipeWire `vnode` 's `state_change` event. Once the state is
