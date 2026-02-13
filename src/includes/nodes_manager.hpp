@@ -53,14 +53,56 @@ class PortLinksManager {
         }
     };
 
+    struct link_info {
+        const uint32_t id;
+        const uint32_t connected_to_node_id;
+        const bool is_output_direction;
+
+        link_info(const uint32_t id, const uint32_t connected_to_node_id, const bool is_output_direction)
+            : id(id), connected_to_node_id(connected_to_node_id), is_output_direction(is_output_direction) {
+        }
+    };
+
+    struct link_infos {
+        vector<link_info *> links_list;
+
+        link_infos() {
+            this->links_list = {};
+        }
+
+        void insert_link_info(const uint32_t id, const uint32_t connected_to_node_id, const bool is_output_direction) {
+            this->links_list.push_back(new link_info(id, connected_to_node_id, is_output_direction));
+        }
+
+        ~link_infos() {
+            for (link_info *link : this->links_list) {
+                delete link;
+                link = nullptr;
+            }
+            this->links_list.clear();
+        }
+    };
+
+    static unordered_map<uint32_t, link_infos *> node_id_to_link_infos;
     static vector<link_connect_task_data *> link_connect_tasks_list;
 
-    static void work_link_connect_task();
+    /**
+     * THIS CAN LITERALLY ONLY STORE ONE CONNECTION PER NODE
+     * SO ONE NODE CAN ONLY BE CONNECTED TO ANOTHER NODE AND BE STORED IN HERE
+     */
+    static unordered_map<uint32_t, link_proxies_data *> node_id_to_create_link_proxies;
+
+    static link_infos &get_modifiable_link_infos_entry(uint32_t node_id);
+    static void cleanup_link_infos_with_node_id(uint32_t node_id);
+    static void disconnect_links_from_node(const uint32_t node_id, pw_registry *reg);
+
+    static void work_link_connect_task(pw_registry *reg);
 
     static void cleanup_port_infos_with_node_id(uint32_t node_id);
-    static void remove_link_proxies_with_node_id(const uint32_t node_id);
+    static void remove_created_link_proxies_with_node_id(const uint32_t node_id);
 
-    static void store_link_proxy_between_nodes(pw_proxy *link, const uint32_t node_id_one, const uint32_t node_id_two);
+    static void store_created_link_proxy_between_nodes(pw_proxy *link, const uint32_t node_id_one,
+                                                       const uint32_t node_id_two);
     static link_proxies_data &get_modifiable_link_proxies(const uint32_t node_id);
 
   public:
@@ -75,12 +117,6 @@ class PortLinksManager {
             string audio_channel;
             string node_id;
 
-            port_info(const uint32_t id) : id(id) {
-                this->audio_channel = "";
-                this->port_direction = "";
-                this->node_id = "";
-            }
-
             port_info(const uint32_t id, string port_direction, string audio_channel, string node_id) : id(id) {
                 this->audio_channel = audio_channel;
                 this->port_direction = port_direction;
@@ -94,6 +130,7 @@ class PortLinksManager {
             port_infos() {
                 this->ports_list = {};
             }
+
             void insert_port_info(const uint32_t id, string port_direction, string audio_channel, string node_id) {
                 this->ports_list.push_back(new port_info(id, port_direction, audio_channel, node_id));
             }
@@ -112,18 +149,13 @@ class PortLinksManager {
                                             pw_core &core, const uint32_t channels);
     };
 
-    static void enlist_registry_port_event(const uint32_t id, const struct spa_dict *props);
+    static void enlist_registry_link_event(const uint32_t id, const struct spa_dict *props);
+    static void enlist_registry_port_event(const uint32_t id, const struct spa_dict *props, pw_registry *reg);
     static void enlist_registry_node_remove_event(const uint32_t id);
     static void cleanup();
 
   private:
     static unordered_map<uint32_t, NodeManagerAccessor::port_infos *> node_id_to_port_infos;
-
-    /**
-     * THIS CAN LITERALLY ONLY STORE ONE CONNECTION PER NODE
-     * SO ONE NODE CAN ONLY BE CONNECTED TO ANOTHER NODE AND BE STORED IN HERE
-     */
-    static unordered_map<uint32_t, link_proxies_data *> node_id_to_link_proxies;
 
     static NodeManagerAccessor::port_infos &get_modifiable_port_infos_entry(uint32_t node_id);
 };

@@ -1,7 +1,9 @@
 #include "includes/audio_daemon.hpp"
 #include "includes/audio_manager.hpp"
 #include "includes/utils.hpp"
+#include "pipewire/core.h"
 #include "pipewire/keys.h"
+#include "pipewire/link.h"
 #include "pipewire/pipewire.h"
 #include <build.h>
 
@@ -15,8 +17,12 @@ void AudioDaemon::reg_event_find_chromium_and_mic_nodes(void *data, uint32_t id,
 
     auto *reg_data = (struct registry_event_global_data *)data;
 
+    if (strcmp(type, PW_TYPE_INTERFACE_Link) == 0) {
+        AudioManager::enlist_registry_link_event(id, props);
+    }
+
     if (strcmp(type, PW_TYPE_INTERFACE_Port) == 0) {
-        AudioManager::enlist_registry_port_event(id, props);
+        AudioManager::enlist_registry_port_event(id, props, reg_data->reg);
     }
 
     if (strcmp(type, PW_TYPE_INTERFACE_Node) == 0) {

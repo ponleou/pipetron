@@ -52,16 +52,38 @@ void PortLinksManager::remove_entry_with_node_id(uint32_t node_id, unordered_map
     }
 }
 
-void PortLinksManager::cleanup_port_infos_with_node_id(uint32_t node_id) {
-    PortLinksManager::remove_entry_with_node_id<NodeManagerAccessor::port_infos>(node_id, node_id_to_port_infos);
+void PortLinksManager::cleanup_link_infos_with_node_id(uint32_t node_id) {
+    remove_entry_with_node_id(node_id, node_id_to_link_infos);
 }
 
+void PortLinksManager::cleanup_port_infos_with_node_id(uint32_t node_id) {
+    remove_entry_with_node_id(node_id, node_id_to_port_infos);
+}
+
+unordered_map<uint32_t, PortLinksManager::link_infos *> PortLinksManager::node_id_to_link_infos = {};
 vector<PortLinksManager::link_connect_task_data *> PortLinksManager::link_connect_tasks_list = {};
+unordered_map<uint32_t, PortLinksManager::link_proxies_data *> PortLinksManager::node_id_to_create_link_proxies = {};
 
-unordered_map<uint32_t, PortLinksManager::link_proxies_data *> PortLinksManager::node_id_to_link_proxies = {};
+PortLinksManager::link_infos &PortLinksManager::get_modifiable_link_infos_entry(uint32_t node_id) {
+    if (node_id_to_link_infos.find(node_id) == node_id_to_link_infos.end()) {
+        node_id_to_link_infos[node_id] = new link_infos();
+        // TODO: log, follow set_vnode
+    }
+    return *node_id_to_link_infos[node_id];
+}
 
-void PortLinksManager::store_link_proxy_between_nodes(pw_proxy *link, const uint32_t node_id_one,
-                                                      const uint32_t node_id_two) {
+void PortLinksManager::disconnect_links_from_node(const uint32_t node_id, pw_registry *reg) {
+    const link_infos &links = get_modifiable_link_infos_entry(node_id);
+
+    for (auto &link : links.links_list) {
+        pw_registry_destroy(reg, link->id);
+    }
+
+    remove_entry_with_node_id(node_id, node_id_to_link_infos);
+}
+
+void PortLinksManager::store_created_link_proxy_between_nodes(pw_proxy *link, const uint32_t node_id_one,
+                                                              const uint32_t node_id_two) {
     // TODO: log
     auto &entry_one = get_modifiable_link_proxies(node_id_one);
     auto &entry_two = get_modifiable_link_proxies(node_id_two);
@@ -80,8 +102,8 @@ void PortLinksManager::NodeManagerAccessor::enqueue_link_connection(const uint32
     link_connect_tasks_list.push_back(new link_connect_task_data(playback_node_id, capture_node_id, core, channels));
 }
 
-void PortLinksManager::work_link_connect_task() {
-    const auto &port_infos_map = PortLinksManager::NodeManagerAccessor::get_port_infos_map();
+void PortLinksManager::work_link_connect_task(pw_registry *reg) {
+    const auto &port_infos_map = NodeManagerAccessor::get_port_infos_map();
 
     for (size_t i = 0; i < link_connect_tasks_list.size(); i++) {
         uint32_t link_connected = 0;
@@ -96,21 +118,23 @@ void PortLinksManager::work_link_connect_task() {
         if (port_infos_map.find(playback_node_id) == port_infos_map.end())
             continue;
 
+        // disconnect all links from the playback (electron node)
+        disconnect_links_from_node(playback_node_id, reg);
+
         // since we are going to be adding links between these two, make sure we remove any current links between the
         // two
-        PortLinksManager::remove_link_proxies_with_node_id(playback_node_id);
-        PortLinksManager::remove_link_proxies_with_node_id(capture_node_id);
+        remove_created_link_proxies_with_node_id(playback_node_id);
+        remove_created_link_proxies_with_node_id(capture_node_id);
 
-        const vector<PortLinksManager::NodeManagerAccessor::port_info *> &playback_ports =
+        const vector<NodeManagerAccessor::port_info *> &playback_ports =
             port_infos_map.at(playback_node_id)->ports_list;
-        const vector<PortLinksManager::NodeManagerAccessor::port_info *> &capture_ports =
-            port_infos_map.at(capture_node_id)->ports_list;
+        const vector<NodeManagerAccessor::port_info *> &capture_ports = port_infos_map.at(capture_node_id)->ports_list;
 
-        for (const PortLinksManager::NodeManagerAccessor::port_info *playback_port : playback_ports) {
+        for (const NodeManagerAccessor::port_info *playback_port : playback_ports) {
             if (playback_port->port_direction != "out")
                 continue;
 
-            for (const PortLinksManager::NodeManagerAccessor::port_info *capture_port : capture_ports) {
+            for (const NodeManagerAccessor::port_info *capture_port : capture_ports) {
                 if (capture_port->port_direction != "in")
                     continue;
 
@@ -127,8 +151,7 @@ void PortLinksManager::work_link_connect_task() {
                                                        PW_VERSION_LINK, &props->dict, 0);
 
                     if (link != nullptr) {
-                        PortLinksManager::store_link_proxy_between_nodes((pw_proxy *)link, playback_node_id,
-                                                                         capture_node_id);
+                        store_created_link_proxy_between_nodes((pw_proxy *)link, playback_node_id, capture_node_id);
                         link_connected++;
                     }
                 }
@@ -144,25 +167,38 @@ void PortLinksManager::work_link_connect_task() {
 }
 
 PortLinksManager::link_proxies_data &PortLinksManager::get_modifiable_link_proxies(const uint32_t node_id) {
-    if (node_id_to_link_proxies.find(node_id) == node_id_to_link_proxies.end()) {
-        node_id_to_link_proxies[node_id] = new link_proxies_data();
+    if (node_id_to_create_link_proxies.find(node_id) == node_id_to_create_link_proxies.end()) {
+        node_id_to_create_link_proxies[node_id] = new link_proxies_data();
     }
-    return *node_id_to_link_proxies[node_id];
+    return *node_id_to_create_link_proxies[node_id];
 }
 
-void PortLinksManager::remove_link_proxies_with_node_id(const uint32_t node_id) {
-    if (node_id_to_link_proxies.find(node_id) == node_id_to_link_proxies.end())
+void PortLinksManager::remove_created_link_proxies_with_node_id(const uint32_t node_id) {
+    if (node_id_to_create_link_proxies.find(node_id) == node_id_to_create_link_proxies.end())
         return;
 
-    const uint32_t connected_node_id = node_id_to_link_proxies.at(node_id)->connected_node_id;
+    const uint32_t connected_node_id = node_id_to_create_link_proxies.at(node_id)->connected_node_id;
 
-    PortLinksManager::remove_entry_with_node_id(node_id, node_id_to_link_proxies);
-    if (node_id_to_link_proxies.find(connected_node_id) != node_id_to_link_proxies.end()) {
-        PortLinksManager::remove_entry_with_node_id(connected_node_id, node_id_to_link_proxies);
+    PortLinksManager::remove_entry_with_node_id(node_id, node_id_to_create_link_proxies);
+    if (node_id_to_create_link_proxies.find(connected_node_id) != node_id_to_create_link_proxies.end()) {
+        PortLinksManager::remove_entry_with_node_id(connected_node_id, node_id_to_create_link_proxies);
     }
 }
 
-void PortLinksManager::enlist_registry_port_event(const uint32_t id, const struct spa_dict *props) {
+void PortLinksManager::enlist_registry_link_event(const uint32_t id, const struct spa_dict *props) {
+    const char *input_node = spa_dict_lookup(props, PW_KEY_LINK_INPUT_NODE);
+    const char *output_node = spa_dict_lookup(props, PW_KEY_LINK_OUTPUT_NODE);
+
+    if (input_node && output_node) {
+        link_infos &input_links = get_modifiable_link_infos_entry(atoi(input_node));
+        link_infos &output_links = get_modifiable_link_infos_entry(atoi(output_node));
+
+        input_links.insert_link_info(id, atoi(output_node), false);
+        output_links.insert_link_info(id, atoi(input_node), true);
+    }
+}
+
+void PortLinksManager::enlist_registry_port_event(const uint32_t id, const struct spa_dict *props, pw_registry *reg) {
     const char *node_id = spa_dict_lookup(props, PW_KEY_NODE_ID);
     const char *audio_channel = spa_dict_lookup(props, PW_KEY_AUDIO_CHANNEL);
     const char *port_direction = spa_dict_lookup(props, PW_KEY_PORT_DIRECTION);
@@ -173,12 +209,13 @@ void PortLinksManager::enlist_registry_port_event(const uint32_t id, const struc
                                audio_channel ? string(audio_channel) : "", node_id ? string(node_id) : "");
     }
 
-    work_link_connect_task();
+    work_link_connect_task(reg);
 }
 
 void PortLinksManager::enlist_registry_node_remove_event(const uint32_t id) {
-    remove_link_proxies_with_node_id(id);
+    remove_created_link_proxies_with_node_id(id);
     cleanup_port_infos_with_node_id(id);
+    cleanup_link_infos_with_node_id(id);
 }
 
 void PortLinksManager::cleanup() {
@@ -195,8 +232,11 @@ void PortLinksManager::cleanup() {
     for (const auto &[key, value] : node_id_to_port_infos)
         remove_entry_with_node_id(key, node_id_to_port_infos);
 
-    for (const auto &[key, value] : node_id_to_link_proxies)
-        remove_entry_with_node_id(key, node_id_to_link_proxies);
+    for (const auto &[key, value] : node_id_to_create_link_proxies)
+        remove_entry_with_node_id(key, node_id_to_create_link_proxies);
+
+    for (const auto &[key, value] : node_id_to_link_infos)
+        remove_entry_with_node_id(key, node_id_to_link_infos);
 }
 
 // ===== END OF PORT LINKS MANAGER =====

@@ -1,5 +1,6 @@
 #include "includes/audio_manager.hpp"
 #include "includes/nodes_manager.hpp"
+#include "pipewire/core.h"
 #include "spa/utils/dict.h"
 #include <build.h>
 #include <cstdint>
@@ -107,8 +108,12 @@ void AudioStores::FriendAccessor::cleanup() {
 // =======================================
 // ============ AUDIO MANAGER ============
 
-void AudioManager::enlist_registry_port_event(const uint32_t id, const struct spa_dict *props) {
-    PortLinksManager::enlist_registry_port_event(id, props);
+void AudioManager::enlist_registry_port_event(const uint32_t id, const struct spa_dict *props, pw_registry *reg) {
+    PortLinksManager::enlist_registry_port_event(id, props, reg);
+}
+
+void AudioManager::enlist_registry_link_event(const uint32_t id, const struct spa_dict *props) {
+    PortLinksManager::enlist_registry_link_event(id, props);
 }
 
 void *AudioManager::post_mic_process_hook(NodesManager::create_node_args *vnode_args, void *data) {

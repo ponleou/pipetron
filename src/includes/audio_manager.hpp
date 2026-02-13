@@ -171,7 +171,9 @@ class AudioManager {
     static void connect_capture_to_elec_node(const uint32_t elec_node_id, pw_loop &loop);
 
   public:
-    static void enlist_registry_port_event(const uint32_t id, const struct spa_dict *props);
+    static void enlist_registry_link_event(const uint32_t id, const struct spa_dict *props);
+
+    static void enlist_registry_port_event(const uint32_t id, const struct spa_dict *props, pw_registry *reg);
 
     /**
      * Entry point when a new PipeWire global node appears. Binds the original node from the registry and initiates
