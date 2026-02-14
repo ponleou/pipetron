@@ -4,12 +4,16 @@
 #include "pipewire/stream.h"
 #include <array>
 #include <cstdint>
+#include <queue>
 #include <spa/param/audio/format-utils.h>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 using std::array;
+using std::move;
+using std::queue;
 using std::string;
 using std::unordered_map;
 using std::vector;
@@ -69,12 +73,66 @@ class AudioStores {
         }
     };
 
+    struct transfer_audio_data {
+        pw_stream &capture_node;
+        pw_stream &vnode;
+        queue<vector<uint8_t>> audio_queue;
+        array<spa_hook *, 2> listeners;
+
+        transfer_audio_data(pw_stream &capture_node, pw_stream &vnode) : capture_node(capture_node), vnode(vnode) {
+            this->audio_queue = {};
+            this->listeners[0] = new spa_hook();
+            this->listeners[1] = new spa_hook();
+        }
+
+        ~transfer_audio_data() {
+            for (spa_hook *listener : this->listeners) {
+                if (listener) {
+                    spa_hook_remove(listener);
+                    delete listener;
+                    listener = nullptr;
+                }
+            }
+            this->listeners.fill(nullptr);
+        }
+
+        void store_buffer_to_queue(pw_buffer *buffer) {
+            if (buffer == nullptr)
+                return;
+
+            for (uint32_t i = 0; i < buffer->buffer->n_datas; i++) {
+                vector<uint8_t> audio_data(buffer->buffer->datas[i].chunk->size);
+
+                memcpy(audio_data.data(), buffer->buffer->datas[i].data, buffer->buffer->datas[i].chunk->size);
+                this->audio_queue.push(move(audio_data));
+            }
+        }
+
+        void load_buffer_from_queue(pw_buffer *buffer) {
+            if (buffer == nullptr)
+                return;
+
+            for (uint32_t i = 0; i < buffer->buffer->n_datas; i++) {
+                if (!this->audio_queue.empty()) {
+                    vector<uint8_t> &audio_data = this->audio_queue.front();
+
+                    memcpy(buffer->buffer->datas[i].data, audio_data.data(), audio_data.size());
+                    buffer->buffer->datas[i].chunk->size = audio_data.size();
+
+                    this->audio_queue.pop();
+                }
+            }
+        }
+    };
+
   private:
     static unordered_map<uint32_t, NodesManager::node_info *> omic_infos;
 
     static unordered_map<uint32_t, NodesManager::node_info *> elec_node_infos;
     static unordered_map<uint32_t, AudioStores::vnode_data *> elec_node_to_vnode_data;
     static unordered_map<uint32_t, AudioStores::vnode_data *> elec_node_to_capture_node_data;
+
+    static unordered_map<uint32_t, AudioStores::transfer_audio_data *> elec_node_to_transfer_audio_data;
     /**
      * Removes and deletes the entry for `node_id` from the given map, if present.
      *
@@ -106,16 +164,16 @@ class AudioStores {
         friend class AudioManager;
 
         /**
-         * Provides the reference to the `elec_node_to_vnode_data` map entry for `elec_node_id` key. If the entry does
-         * not exist, the entry will be created lazily.
+         * Provides the reference to the `elec_node_to_vnode_data` map entry for `elec_node_id` key. If the entry
+         * does not exist, the entry will be created lazily.
          *
          * @return reference to the `vnode_data` entry for `elec_node_id` key.
          */
         static vnode_data &get_modifiable_vnode_data(uint32_t elec_node_id);
 
         /**
-         * Provides the reference to the `elec_node_to_capture_node_data` map entry for `elec_node_id` key. If the entry
-         * does not exist, the entry will be created lazily.
+         * Provides the reference to the `elec_node_to_capture_node_data` map entry for `elec_node_id` key. If the
+         * entry does not exist, the entry will be created lazily.
          *
          * @return reference to the `vnode_data` entry for `elec_node_id` key.
          */
@@ -128,6 +186,9 @@ class AudioStores {
          * @return reference to the `elec_node_info` entry for `elec_node_id` key.
          */
         static NodesManager::node_info &get_modifiable_elec_node_info(uint32_t elec_node_id);
+
+        static transfer_audio_data &start_new_transfer_audio_data(uint32_t elec_node_id, pw_stream &capture,
+                                                                  pw_stream &vnode);
 
         /**
          * TODO: mic
@@ -187,6 +248,9 @@ class AudioManager {
     static void *post_mic_process_hook(NodesManager::create_node_args *vnode_args, void *data);
 
   public:
+    static void on_process_capture_store_data(void *data);
+    static void on_process_vnode_play_data(void *data);
+
     /**
      * Interface for AudioDaemon to call on global registry event when a playback electron node is found. It calls
      * `NodesManager::process_new_node` to collect the node's information, and assigned hooks to create virtual and
@@ -225,8 +289,8 @@ class AudioManager {
      * Interface for AudioDaemon to call on global registry event when the type is a `PW_TYPE_INTERFACE_Port`. It
      * calls `PortLinkManager::enlist_registry_port_event`
      *
-     * `PortLinkManager::enlist_registry_port_event` calls its internal work to create enqueued links between nodes on
-     * new port events. This uses a `pw_registry*` to complete.
+     * `PortLinkManager::enlist_registry_port_event` calls its internal work to create enqueued links between nodes
+     * on new port events. This uses a `pw_registry*` to complete.
      *
      * @param id    ID of the node from the global registry event
      * @param props props of the node from the global registry event
@@ -235,8 +299,8 @@ class AudioManager {
     static void enlist_registry_port_event(const uint32_t id, const struct spa_dict *props, pw_registry *reg);
 
     /**
-     * Registry global-remove callback. Cleans up all stored data from `AudioStores` associated with the removed node
-     * ID, and calls `PortLinkManager` 's own `enlist_registry_node_remove_event`
+     * Registry global-remove callback. Cleans up all stored data from `AudioStores` associated with the removed
+     * node ID, and calls `PortLinkManager` 's own `enlist_registry_node_remove_event`
      *
      * @param id  ID of the removed pipewire item
      */
