@@ -56,7 +56,8 @@ void AudioDaemon::reg_event_find_chromium_and_mic_nodes(void *data, uint32_t id,
                  )) {
 
                 // process electron node
-                AudioManager::process_elec_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id, type);
+                AudioManager::process_playback_elec_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id,
+                                                         type);
                 break;
             }
             // END FIND ELECTRON NODES
@@ -72,7 +73,7 @@ void AudioDaemon::reg_event_find_chromium_and_mic_nodes(void *data, uint32_t id,
 }
 
 void AudioDaemon::on_global_remove(void *data, uint32_t id) {
-    AudioManager::enlist_registry_node_remove_event(id);
+    AudioManager::enlist_registry_remove_event(id);
 }
 
 void AudioDaemon::start() {

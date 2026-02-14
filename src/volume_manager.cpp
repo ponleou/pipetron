@@ -226,13 +226,13 @@ void *VolumeManager::post_node_process_hook(NodesManager::create_node_args *vnod
     vnode_args = nullptr;
 
     VolumeStores::vnode_data &vnode_data = VolumeStores::FriendAccessor::get_modifiable_vnode_data(*onode_id);
-    vnode_data.context = output.vcontext;
-    vnode_data.core = output.vcore;
-    vnode_data.stream = output.vstream;
+    vnode_data.context = output.context;
+    vnode_data.core = output.core;
+    vnode_data.stream = output.stream;
 
-    output.vcontext = nullptr;
-    output.vcore = nullptr;
-    output.vstream = nullptr;
+    output.context = nullptr;
+    output.core = nullptr;
+    output.stream = nullptr;
     vnode_data.id = 0; // default value, will be set by VolumeManager::on_state_change_single_callback
 
     static const pw_stream_events stream_events = {

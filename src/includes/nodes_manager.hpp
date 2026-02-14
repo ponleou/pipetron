@@ -4,7 +4,6 @@
 #include "pipewire/node.h"
 #include "pipewire/stream.h"
 #include <cstdint>
-#include <iostream>
 #include <spa/param/audio/format-utils.h>
 #include <string>
 #include <unordered_map>
@@ -14,6 +13,16 @@ using std::string;
 using std::unordered_map;
 using std::vector;
 
+/**
+ * Manages methods and stores related to ports and links. Stores includes:
+ *  - node_id_to_link_infos:            map with `node_id` key to `link_infos`
+ *  - node_id_to_port_infos:            map with `node_id` key to `port_infos`
+ *  - node_id_to_created_link_proxies:  map with `node_id` key to the link proxy pointers created by PortLinkManager.
+ *                                      Two `node_id` entries, which the links connect with, will contain the same link
+ *                                      proxies pointers.
+ *  - link_connect_tasks_list:          list of task information which are enqueued for PortLinkManager to create links
+ *                                      between two specified nodes when ready
+ */
 class PortLinksManager {
   private:
     /**
@@ -25,34 +34,15 @@ class PortLinksManager {
     template <typename T>
     static void remove_entry_with_node_id(uint32_t node_id, unordered_map<uint32_t, T *> &map);
 
-    struct link_proxies_data {
-        vector<pw_proxy **> link_proxies;
-        uint32_t connected_node_id;
-
-        ~link_proxies_data() {
-            for (auto &ptr : link_proxies) {
-                if (*ptr) {
-                    pw_proxy_destroy(*ptr);
-                    *ptr = nullptr;
-                }
-            }
-            link_proxies.clear();
-        }
-    };
-
-    struct link_connect_task_data {
-        const uint32_t playback_node;
-        const uint32_t capture_node;
-        pw_core &core;
-
-        const uint32_t channels;
-
-        link_connect_task_data(const uint32_t playback_node, const uint32_t capture_node, pw_core &core,
-                               const uint32_t channels)
-            : playback_node(playback_node), capture_node(capture_node), core(core), channels(channels) {
-        }
-    };
-
+    /**
+     * Link information collected from global registry event on PW_TYPE_INTERFACE_Link are stored in this struct. Meant
+     * to be stored in a map to the key of one node ID, while the other node ID is stored in `connected_to_node_id`.
+     *
+     * @param id                    ID of the link
+     * @param connected_to_node_id  the node ID that the link connects to with the entry's key node ID
+     * @param is_output_direction   the direction of the entry's key node ID, false if its an input node, true if its an
+     * output node
+     */
     struct link_info {
         const uint32_t id;
         const uint32_t connected_to_node_id;
@@ -63,6 +53,10 @@ class PortLinksManager {
         }
     };
 
+    /**
+     * Used inside the map `node_id_to_link_infos` to store all links connected to the entry's key node ID as
+     * `link_info`
+     */
     struct link_infos {
         vector<link_info *> links_list;
 
@@ -83,27 +77,175 @@ class PortLinksManager {
         }
     };
 
-    static unordered_map<uint32_t, link_infos *> node_id_to_link_infos;
-    static vector<link_connect_task_data *> link_connect_tasks_list;
+    /**
+     * Struct to contain references to the created link proxies between two nodes. Meant to be mapped to the ID of one
+     * node, while the other node ID is stored in `connected_node_id`.
+     *
+     * Since this data is mapped to a single node ID, while the other ID remains stored in the `connected_node_id`
+     * param, this data's pointer will be stored in 2 different entries for each node ID key. The map is
+     * `node_id_to_created_link_proxies`
+     *
+     * @param link_proxies      vector containing link proxies between the entry's key node ID and `connected_node_id`
+     * @param connected_node_id contains the node ID that the link proxies is connecting with the entry's key node ID
+     */
+    struct created_link_proxies_data {
+        vector<pw_proxy **> link_proxies;
+        uint32_t connected_node_id;
+
+        ~created_link_proxies_data() {
+            for (auto &ptr : link_proxies) {
+                if (*ptr) {
+                    pw_proxy_destroy(*ptr);
+                    *ptr = nullptr;
+                }
+            }
+            link_proxies.clear();
+        }
+    };
 
     /**
-     * THIS CAN LITERALLY ONLY STORE ONE CONNECTION PER NODE
-     * SO ONE NODE CAN ONLY BE CONNECTED TO ANOTHER NODE AND BE STORED IN HERE
+     * Information required for a task definition to create links. On recieving task with this struct, a link will be
+     * created between the `playback_node` and `capture_node`. Tasks are stored in `link_connect_tasks_list`
+     *
+     * @param playback_node the ID of the playback node to create link from
+     * @param capture_node  the ID of the capture node to create link to
+     * @param core          pw_core of either node, required to create link proxies
+     * @param channels      number of channels for each node (should be the same for both playback and capture node),
+     * aka the number of expected links (one for each channel)
      */
-    static unordered_map<uint32_t, link_proxies_data *> node_id_to_create_link_proxies;
+    struct link_connect_task_data {
+        const uint32_t playback_node;
+        const uint32_t capture_node;
+        pw_core &core;
+        const uint32_t channels;
 
+        link_connect_task_data(const uint32_t playback_node, const uint32_t capture_node, pw_core &core,
+                               const uint32_t channels)
+            : playback_node(playback_node), capture_node(capture_node), core(core), channels(channels) {
+        }
+    };
+
+    /**
+     * Port information collected from global registry event on PW_TYPE_INTERFACE_Port are stored in this struct.
+     *
+     * @param id                ID of the port
+     * @param port_direction    direction of the port, input or output port
+     * @param audio_channel     the channel of the port (e.g. FL, FR, etc.)
+     * @param node_id           the node ID that the port belongs to
+     */
+    struct port_info {
+        const uint32_t id;
+        string port_direction;
+        string audio_channel;
+        string node_id;
+
+        port_info(const uint32_t id, string port_direction, string audio_channel, string node_id) : id(id) {
+            this->audio_channel = audio_channel;
+            this->port_direction = port_direction;
+            this->node_id = node_id;
+        }
+    };
+
+    /**
+     * Used inside the map `node_id_to_port_infos` to store all ports belonging to the node_id key
+     */
+    struct port_infos {
+        vector<port_info *> ports_list;
+
+        port_infos() {
+            this->ports_list = {};
+        }
+
+        void insert_port_info(const uint32_t id, string port_direction, string audio_channel, string node_id) {
+            this->ports_list.push_back(new port_info(id, port_direction, audio_channel, node_id));
+        }
+
+        ~port_infos() {
+            for (port_info *port : this->ports_list) {
+                delete port;
+                port = nullptr;
+            }
+            this->ports_list.clear();
+        }
+    };
+
+    static unordered_map<uint32_t, link_infos *> node_id_to_link_infos;
+    /**
+     * THIS CAN LITERALLY ONLY STORE LINKS BETWEEN ONE PAIR OF NODES FOR A NODE
+     * FOR THE USECASE, WE ARE NOT CREATING LINKS BETWEEN MORE THAN ONE NODE FOR ANY NODE
+     */
+    static unordered_map<uint32_t, created_link_proxies_data *> node_id_to_created_link_proxies;
+    static vector<link_connect_task_data *> link_connect_tasks_list;
+    static unordered_map<uint32_t, port_infos *> node_id_to_port_infos;
+
+    /**
+     * Provides the reference to the `node_id_to_link_infos` map entry for `node_id` key. If the entry does
+     * not exist, the entry will be created lazily.
+     *
+     * @return reference to the `link_infos` entry for `node_id` key.
+     */
     static link_infos &get_modifiable_link_infos_entry(uint32_t node_id);
+
+    /**
+     * Remove the `node_id_to_link_infos` map's entry with `node_id` key
+     */
     static void cleanup_link_infos_with_node_id(uint32_t node_id);
-    static void disconnect_links_from_node(const uint32_t node_id, pw_registry *reg);
 
-    static void work_link_connect_task(pw_registry *reg);
+    /**
+     * Disconnect all links connected to `node_id` using stored link info, and also cleans up the `link_infos` entry for
+     * `node_id` by calling `cleanup_link_infos_with_node_id`
+     */
+    static void disconnect_links_from_node_with_link_info(const uint32_t node_id, pw_registry *reg);
 
-    static void cleanup_port_infos_with_node_id(uint32_t node_id);
-    static void remove_created_link_proxies_with_node_id(const uint32_t node_id);
+    /**
+     * Provides the reference to the `node_id_to_created_link_proxies` map entry for `node_id` key. If the entry does
+     * not exist, the entry will be created lazily.
+     *
+     * @return reference to the `created_link_proxies_data` entry for `node_id` key.
+     */
+    static created_link_proxies_data &get_modifiable_link_proxies(const uint32_t node_id);
 
+    /**
+     * Creates two entries for `node_id_to_created_link_proxies` for keys of each node_id_one and node_id_two, where its
+     * `connected_node_id` value is its other pair node_id, and both entries contain the same pointer to the links
+     * connected between the two nodes.
+     */
     static void store_created_link_proxy_between_nodes(pw_proxy *link, const uint32_t node_id_one,
                                                        const uint32_t node_id_two);
-    static link_proxies_data &get_modifiable_link_proxies(const uint32_t node_id);
+
+    /**
+     * Deletes the created link between the pair nodes connected to `node_id` and also cleans up the data in
+     * `node_id_to_created_link_proxies` for the `node_id` entry and its pair connection entry.
+     */
+    static void remove_created_link_proxies_with_node_id(const uint32_t node_id);
+
+    /**
+     * Function called on global registry event for PW_TYPE_INTERFACE_Port which does work enqueued in
+     * `link_connect_tasks_list`. The work done includes removing all links from the task's playback node, and creating
+     * links to all matching channels between the playback and capture nodes specified in `link_connect_task_data`.
+     *
+     * @param reg used to disconnect all links from the playback node by calling
+     * `disconnect_links_from_node_with_link_info`
+     */
+    static void work_link_connect_task(pw_registry *reg);
+
+    /**
+     * Provides the reference to the `node_id_to_port_infos` map entry for `node_id` key. If the entry does
+     * not exist, the entry will be created lazily.
+     *
+     * @return reference to the `port_infos` entry for `node_id` key.
+     */
+    static port_infos &get_modifiable_port_infos_entry(uint32_t node_id);
+
+    /**
+     * Getter for the `node_id_to_port_infos` map. Read-only.
+     */
+    static const unordered_map<uint32_t, port_infos *> &get_port_infos_map();
+
+    /**
+     * Remove the `node_id_to_port_infos` map's entry with `node_id` key
+     */
+    static void cleanup_port_infos_with_node_id(uint32_t node_id);
 
   public:
     class NodeManagerAccessor {
@@ -111,53 +253,48 @@ class PortLinksManager {
         friend class PortLinksManager;
         friend class NodesManager;
 
-        struct port_info {
-            const uint32_t id;
-            string port_direction;
-            string audio_channel;
-            string node_id;
-
-            port_info(const uint32_t id, string port_direction, string audio_channel, string node_id) : id(id) {
-                this->audio_channel = audio_channel;
-                this->port_direction = port_direction;
-                this->node_id = node_id;
-            }
-        };
-
-        struct port_infos {
-            vector<port_info *> ports_list;
-
-            port_infos() {
-                this->ports_list = {};
-            }
-
-            void insert_port_info(const uint32_t id, string port_direction, string audio_channel, string node_id) {
-                this->ports_list.push_back(new port_info(id, port_direction, audio_channel, node_id));
-            }
-
-            ~port_infos() {
-                for (port_info *port : this->ports_list) {
-                    delete port;
-                    port = nullptr;
-                }
-                this->ports_list.clear();
-            }
-        };
-
-        static const unordered_map<uint32_t, port_infos *> &get_port_infos_map();
-        static void enqueue_link_connection(const uint32_t playback_node_id, const uint32_t capture_node_id,
-                                            pw_core &core, const uint32_t channels);
+        /**
+         * Create `link_connect_task_data` to `link_connect_tasks_list`. The task will remove all links from playback
+         * node, and create links between the playback and capture node on `work_link_connect_task` call.
+         */
+        static void enqueue_link_connection_task(const uint32_t playback_node_id, const uint32_t capture_node_id,
+                                                 pw_core &core, const uint32_t channels);
     };
 
+    /**
+     * Called on global registry event when the type is a `PW_TYPE_INTERFACE_Link` which stores `link_infos` to
+     * `node_id_to_link_infos`. Stores two entries for one link node, each for the two connected `node_id` s between the
+     * link.
+     *
+     * @param id    ID of the link
+     * @param props props of the link
+     */
     static void enlist_registry_link_event(const uint32_t id, const struct spa_dict *props);
+
+    /**
+     * Called on global registry event when the type is a `PW_TYPE_INTERFACE_Port` which stores `port_infos` to
+     * `node_id_to_link_infos`. Stores an entry mapped to the `node_id` that the port belongs to, and also calls
+     * `work_link_connect_task` to complete enqueued link creation tasks.
+     *
+     * @param id    ID of the link
+     * @param props props of the link
+     * @param reg   pw_registry pointer required by `work_link_connect_task` to delete links
+     */
     static void enlist_registry_port_event(const uint32_t id, const struct spa_dict *props, pw_registry *reg);
-    static void enlist_registry_node_remove_event(const uint32_t id);
+
+    /**
+     * Called on registry global remove event. Deletes link proxies created by PortLinkManager, `link_infos`, and
+     * `port_infos` from `node_id_to_*` maps in PortLinkManager for the `id` keys.
+     *
+     * @param id  ID of the removed pipewire item
+     */
+    static void enlist_registry_remove_event(const uint32_t id);
+
+    /**
+     * Called on process kill, which cleans up `node_id_to_link_infos`, `node_id_to_created_link_proxies`,
+     * `link_connect_tasks_list`, and `node_id_to_port_infos`.
+     */
     static void cleanup();
-
-  private:
-    static unordered_map<uint32_t, NodeManagerAccessor::port_infos *> node_id_to_port_infos;
-
-    static NodeManagerAccessor::port_infos &get_modifiable_port_infos_entry(uint32_t node_id);
 };
 
 /**
@@ -165,6 +302,17 @@ class PortLinksManager {
  */
 class NodesManager {
   private:
+    /**
+     * Struct used to pass through to the created capture's state change callback, which gets the capture stream's ID
+     * when ready, start the process of disconnecting links to the playback onode, and connect a created capture to the
+     * playback.
+     *
+     * @param onode_id      the node_id of the (electron) playback node
+     * @param channels      number of channels of the playback node (and the capture node which uses the same setting)
+     * @param core          pw_core used to create links
+     * @param stream        pw_stream of the created capture node
+     * @param self_listener listener for the state_change single callback
+     */
     struct state_change_enqueue_connect_capture_to_onode_args {
         const uint32_t onode_id;
         const uint32_t channels;
@@ -190,8 +338,10 @@ class NodesManager {
     /**
      * Contains string description of node
      *
+     * @param app_name              The name of the node.
+     * @param app_icon_name         The name of the icon used by the node
      * @param app_process_binary    The binary name of the application owning this node.
-     * @param node_description      The node description
+     * @param node_description      The node description.
      * @param media_class           The media class (e.g. "Stream/Output/Audio").
      * @param media_name            The media name (e.g. the stream title).
      */
@@ -206,7 +356,7 @@ class NodesManager {
 
   public:
     /**
-     * Stores metadata gathered from an original PipeWire node.
+     * Store of information for a PipeWire node. Inherits `node_desc`.
      *
      * @param id                    The PipeWire node ID.
      * @param audio_info            The raw audio format info (channels, rate, format) parsed from SPA_PARAM_Format.
@@ -222,11 +372,12 @@ class NodesManager {
     ;
 
     /**
-     * Input arguments for `NodesManager::replicate_virtual_node`.
+     * Generic input arguments for methods in NodeManager that creates nodes in replication to the `onode` information,
+     * such as `replicate_vnode` and `connect_capture_to_onode`.
      *
      * @param loop          The PipeWire main loop the virtual node's context will run on.
      * @param onode         The original node's metadata used to replicate its properties.
-     * @param override_desc Optional node descriptions that will override `onode` 's metadata when replicating
+     * @param override_desc Optional node descriptions that will override `node_info` 's metadata when replicating
      * properties.
      */
     struct create_node_args {
@@ -237,19 +388,19 @@ class NodesManager {
         create_node_args(pw_loop &loop, const NodesManager::node_info &onode) : loop(loop), onode(onode) {
         }
     };
-    ;
+
     /**
-     * Output of `NodesManager::replicate_virtual_node`. Contains the PipeWire objects that make up the newly created
-     * virtual node.
+     * Generic output of for methods in NodeManager that creates nodes, such as `replicate_vnode` and
+     * `connect_capture_to_onode`. Contains the PipeWire objects that make up the newly created node.
      *
-     * @param vstream   The pw_stream of the virtual node.
-     * @param vcontext  The pw_context of the virtual node.
-     * @param vcore     The pw_core connection of the virtual node.
+     * @param stream   The pw_stream of the virtual node.
+     * @param context  The pw_context of the virtual node.
+     * @param core     The pw_core connection of the virtual node.
      */
     struct create_node_output {
-        pw_stream *vstream;
-        pw_context *vcontext;
-        pw_core *vcore;
+        pw_stream *stream;
+        pw_context *context;
+        pw_core *core;
     };
     ;
 
@@ -374,6 +525,11 @@ class NodesManager {
     static void on_node_param_process_callback(void *data, int seq, uint32_t id, uint32_t index, uint32_t next,
                                                const spa_pod *param);
 
+    /**
+     * State_change single callback for the created capture stream called from `connect_capture_to_onode`. Collects the
+     * created capture stream's ID when ready, and enqueues a link creation task between the created capture stream and
+     * the `onode_id` passed from the data as `state_change_enqueue_connect_capture_to_onode_args`.
+     */
     static void on_state_change_enqueue_connect_capture_to_onode_single_callback(void *data, enum pw_stream_state old,
                                                                                  enum pw_stream_state state,
                                                                                  const char *error);
@@ -398,5 +554,14 @@ class NodesManager {
      */
     static void replicate_vnode(const create_node_args &args, create_node_output &output);
 
-    static void connect_capture_to_onode(const create_node_args &args, create_node_output &output);
+    /**
+     * Creates a capture node to connect with the node referenced in `onode_args`. Replicates onode information from
+     * `onode_args` and calls `on_state_change_enqueue_connect_capture_to_onode_single_callback` to enqueue process to
+     * connect links to the capture node from the onode.
+     *
+     * @param args      Input args provided inside `post_node_process_hook`, reference to the playback onode to connect
+     * a capture to.
+     * @param output    Output struct populated with the created stream, context, and core for the capture node.
+     */
+    static void connect_capture_to_onode(const create_node_args &onode_args, create_node_output &output);
 };
