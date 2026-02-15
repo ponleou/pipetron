@@ -1,8 +1,9 @@
 for output onodes:
 
-- [ ] create an input stream to take audio data
-- [ ] copy audio data into the coressponding vnode
-- [ ] ensure vnode is connected to the same output device as the onode, either one way sync or double sync (not recommended)
+- [x] create an input stream to take audio data
+- [x] copy audio data into the coressponding vnode
+- [x] ensure vnode is connected to the same output device as the onode, either one way sync or double sync (not recommended)
+- [ ] lock chromium volume to 100%
 
 for input onodes:
 
@@ -22,3 +23,10 @@ other:
     - create_vnode_args should have optional strings for the other fields
     - replicate_vnode function shoudl read teh optional, if empty, use the onode values
     - ensures it always uses the correct audio setting
+
+CURRENT:
+
+- [ ] work on fixmes and todos in code
+- [x] copy audio data from capture node to vnode
+- [x] manually connect vnode to the same sink that the onode is connected to (before the onode links are removed and captures are made)
+- [ ] make a helper function for get_modifiable_entry

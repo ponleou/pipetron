@@ -157,7 +157,7 @@ void *AudioManager::post_mic_process_hook(NodesManager::create_node_args *vnode_
     return nullptr;
 }
 
-void AudioManager::on_process_capture_store_data(void *data) {
+void AudioManager::on_process_capture_store_data_callback(void *data) {
     auto *args = (AudioStores::transfer_audio_data *)data;
 
     pw_buffer *capture_buf = pw_stream_dequeue_buffer(&args->capture_node);
@@ -168,7 +168,7 @@ void AudioManager::on_process_capture_store_data(void *data) {
     }
 }
 
-void AudioManager::on_process_vnode_play_data(void *data) {
+void AudioManager::on_process_vnode_play_data_callback(void *data) {
     auto *args = (AudioStores::transfer_audio_data *)data;
 
     pw_buffer *vnode_buf = pw_stream_dequeue_buffer(&args->vnode);
@@ -261,7 +261,7 @@ void *AudioManager::post_elec_node_process_hook(NodesManager::create_node_args *
     // create listeners to run the transfer audio
     static const pw_stream_events capture_events = {
         .version = PW_VERSION_STREAM_EVENTS,
-        .process = on_process_capture_store_data,
+        .process = on_process_capture_store_data_callback,
     };
 
     auto &transfer_audio_data = AudioStores::FriendAccessor::start_new_transfer_audio_data(
@@ -272,7 +272,7 @@ void *AudioManager::post_elec_node_process_hook(NodesManager::create_node_args *
 
     static const pw_stream_events vnode_events = {
         .version = PW_VERSION_STREAM_EVENTS,
-        .process = on_process_vnode_play_data,
+        .process = on_process_vnode_play_data_callback,
     };
 
     pw_stream_add_listener(vnode_data.stream, transfer_audio_data.listeners[1], &vnode_events, &transfer_audio_data);

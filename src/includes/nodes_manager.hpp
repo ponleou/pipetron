@@ -80,17 +80,16 @@ class PortLinksManager {
     };
 
     /**
-     * Struct to contain references to the created link proxies between two nodes. Meant to be mapped to the ID of one
-     * node, while the other node ID is stored in `connected_node_id`.
+     * Struct to contain one instance of a created link proxy between two nodes. Meant to be mapped to the ID of one
+     * node, while the other node ID is stored in `connected_node_id`. These instances reference the link created
+     * manually by the program.
      *
-     * Since this data is mapped to a single node ID, while the other ID remains stored in the `connected_node_id`
-     * param, this data's pointer will be stored in 2 different entries for each node ID key. The map is
-     * `node_id_to_created_link_proxies`
+     * The link_proxy_ptr is a pointer in a `shared_ptr`, allowing reference by multiple node. This is used to allow
+     * multiple `created_link_proxy` instances to reference the same `link_proxy_ptr` because a link connects between
+     * two nodes. Hence, two entries in the map may reference the same proxy pointer.
      *
-     * @param link_proxies      vector containing link proxies between the entry's key node ID and `connected_node_id`
+     * @param link_proxy_ptr    a shared pointer containing the pw_proxy pointer for the link
      * @param connected_node_id contains the node ID that the link proxies is connecting with the entry's key node ID
-     *
-     * TODO: FIXME:
      */
     struct created_link_proxy {
         shared_ptr<pw_proxy *> link_proxy_ptr;
@@ -109,6 +108,10 @@ class PortLinksManager {
         }
     };
 
+    /**
+     * Struct used to store multiple `created_link_proxy` instances in a single vector. Meant to be mapped to the ID of
+     * one node, allowing the node to contain multiple `created_link_proxy` instances.
+     */
     struct created_link_proxies_data {
         vector<created_link_proxy *> link_proxies;
 
@@ -240,6 +243,10 @@ class PortLinksManager {
      * `link_connect_tasks_list`. The work done includes removing all links from the task's playback node, and creating
      * links to all matching channels between the playback and capture nodes specified in `link_connect_task_data`.
      *
+     * WARNING: this function does not handle checks to automatically remove tasks from list if the enqueued node pairs
+     * can never be linked. The task will forever remain in the task list until the link is completed successfully. If
+     * the link cannot be created, the function will continue to fail on every retry.
+     *
      * @param reg used to disconnect all links from the playback node by calling
      * `disconnect_links_from_node_with_link_info`
      */
@@ -272,10 +279,37 @@ class PortLinksManager {
         /**
          * Create `link_connect_task_data` to `link_connect_tasks_list`. The task will remove all links from playback
          * node, and create links between the playback and capture node on `work_link_connect_task` call.
+         *
+         * WARNING: enqueuing a link connection task assumes that the two nodes CAN and WILL succeed whenever possible.
+         * If task is enqueued with two nodes that are not compatible (non-matching channels or direction), the task
+         * will forever remain in the task list, and will fail on every retry. This can siginifcantly slow down program.
+         *
+         * @param playback_node_id node ID of the playback node
+         * @param capture_node_id node ID of the capture node
+         * @param core pw_core reference of either playback or capture node, required to create the link
+         * @param channels the number of channels of either playback or capture node, which should be the same (aka, the
+         * number of links that will be created between the two nodes)
          */
         static void enqueue_link_connection_task(const uint32_t playback_node_id, const uint32_t capture_node_id,
                                                  pw_core &core, const uint32_t channels);
 
+        /**
+         * This function will ensure the modifying node will have links connected to the same nodes as the node to be
+         * copied. The function will disconnect all current links in the modifying node, and create links to all nodes
+         * that the node to copy is connected to.
+         *
+         * WARNING: This function only works for playback nodes, that is, the modifying node and the node to be copied
+         * must be playback. This function also calls `enqueue_link_connection_task`, meaning it requires that the node
+         * to be modified can be connected to the same nodes that the node to be copied are connected to.
+         *
+         * @param modify_node           pw_stream of the playback node to have its links modified
+         * @param modify_node_id        node ID of `modify_node`
+         * @param modify_node_core      pw_core of `modify_node`
+         * @param modify_node_channels  the number of channels that `modify_node` playback has (aka, number of links
+         * created). This should be the same as the node to be copied.
+         * @param node_id_to_copy       the node ID of the node that modifying node will follow for its link connections
+         * @param reg                   pw_registry pointer, required to disconnect all links from `modify_node`.
+         */
         static void copy_playback_link_direction(pw_stream &modify_node, const uint32_t modify_node_id,
                                                  pw_core &modify_node_core, const uint32_t modify_node_channels,
                                                  const uint32_t node_id_to_copy, pw_registry *reg);
@@ -585,6 +619,9 @@ class NodesManager {
      */
     static void connect_capture_to_onode(const create_node_args &onode_args, create_node_output &output);
 
+    /**
+     * Interface in NodeManagers that will call PortLinkManager's `copy_playback_link_direction`.
+     */
     static void copy_playback_link_direction(pw_stream &modify_node, const uint32_t modify_node_id,
                                              pw_core &modify_node_core, const uint32_t modify_node_channels,
                                              const uint32_t node_id_to_copy, pw_registry *reg);

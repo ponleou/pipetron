@@ -23,6 +23,12 @@ class AudioManagerArgs {
   private:
     friend class AudioManager;
 
+    /**
+     * Args struct passed to `post_elec_node_process_hook` function.
+     *
+     * @param onode_id the node ID of the original/electron node
+     * @param reg pw_registry reference which will be used to create `on_state_changed_vnode_copy_link_direction_args`
+     */
     struct post_elec_node_process_hook_args {
         const uint32_t onode_id;
         pw_registry &reg;
@@ -31,6 +37,11 @@ class AudioManagerArgs {
         }
     };
 
+    /**
+     * Args struct passed to `on_state_changed_vnode_copy_link_direction_single_callback`. Contains all data required to
+     * call NodeManager's `copy_playback_link_direction` after getting the stream's ID in the `state_changed` callback.
+     * Contains self_listener for the single callback.
+     */
     struct on_state_changed_vnode_copy_link_direction_args {
         const uint32_t onode_id;
         pw_registry &reg;
@@ -111,6 +122,20 @@ class AudioStores {
         }
     };
 
+    /**
+     * Data struct stored in a map to the original node ID that holds `process` listeners for the capture node and the
+     * virtual node, which are responsible for copying audio data from the capture node into the virtual node for
+     * playback. Has all the essential data to keep `process` callback running and copying audio data in isolation.
+     *
+     * @param capture_node  the capture node's pw_stream object, used to dequeue buffer and copy audio data into queue
+     * @param vnode         the playback virtual node's pw_stream object, used to dequeue buffer and copy audio data
+     * from queue
+     * @param audio_queue   contains audio data in queue from `capture_node` to be taken by `vnode` playback
+     * @param listeners     holds pointers to the two `process` listeners for `capture_node` and `vnode`
+     *
+     * @param store_buffer_to_queue   called by `capture_node` 's process callback to store buffer data into the queue
+     * @param load_buffer_from_queue  called by `vnode` 's process callback to copy data from queue into its buffer
+     */
     struct transfer_audio_data {
         pw_stream &capture_node;
         pw_stream &vnode;
@@ -230,6 +255,12 @@ class AudioStores {
          */
         static NodesManager::node_info &get_modifiable_elec_node_info(uint32_t elec_node_id);
 
+        /**
+         * Deletes existing `transfer_audio_data` instance in `elec_node_id` entry from
+         * `elec_node_to_transfer_audio_data` map (if any), and creates a new `transfer_audio_data` instance.
+         *
+         * @return reference to the new `transfer_audio_data` instance
+         */
         static transfer_audio_data &start_new_transfer_audio_data(uint32_t elec_node_id, pw_stream &capture,
                                                                   pw_stream &vnode);
 
@@ -261,6 +292,13 @@ class AudioManager {
   private:
     struct process_and_vnode_args_data;
 
+    /**
+     * `vnode` 's single callback for `state_changed` event, which on `PW_STREAM_STATE_PAUSED`, will get the stream's ID
+     * and call NodeManager's `copy_playback_link_direction` for `vnode` as modifying node, and the electron (original)
+     * node as node to be copied. Will delete its own `self_listener` from `data` after a successful run.
+     *
+     * @param data `on_state_changed_vnode_copy_link_direction_args` instance data
+     */
     static void on_state_changed_vnode_copy_link_direction_single_callback(void *data, enum pw_stream_state old,
                                                                            enum pw_stream_state state,
                                                                            const char *error);
@@ -295,8 +333,23 @@ class AudioManager {
     static void *post_mic_process_hook(NodesManager::create_node_args *vnode_args, void *data);
 
   public:
-    static void on_process_capture_store_data(void *data);
-    static void on_process_vnode_play_data(void *data);
+    /**
+     * Callback used by the capture node connected to the original electron node. Called on `process` event, which will
+     * copy the capture node's audio buffer into the `transfer_audio_data` instance queue.
+     *
+     * @param data data casted to `transfer_audio_data` which contains the info required to transfer between the two
+     * pairs in isolation
+     */
+    static void on_process_capture_store_data_callback(void *data);
+
+    /**
+     * Callback used by the replicated virtual node for playback. Called on `process` event, which will copy audio data
+     * from the `transfer_audio_data` queue into its buffer for playback.
+     *
+     * @param data data casted to `transfer_audio_data` which contains the info required to transfer between the two
+     * pairs in isolation
+     */
+    static void on_process_vnode_play_data_callback(void *data);
 
     /**
      * Interface for AudioDaemon to call on global registry event when a playback electron node is found. It calls
