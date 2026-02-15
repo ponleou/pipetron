@@ -4,11 +4,13 @@
 #include "pipewire/node.h"
 #include "pipewire/stream.h"
 #include <cstdint>
+#include <memory>
 #include <spa/param/audio/format-utils.h>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+using std::shared_ptr;
 using std::string;
 using std::unordered_map;
 using std::vector;
@@ -87,19 +89,37 @@ class PortLinksManager {
      *
      * @param link_proxies      vector containing link proxies between the entry's key node ID and `connected_node_id`
      * @param connected_node_id contains the node ID that the link proxies is connecting with the entry's key node ID
+     *
+     * TODO: FIXME:
      */
-    struct created_link_proxies_data {
-        vector<pw_proxy **> link_proxies;
+    struct created_link_proxy {
+        shared_ptr<pw_proxy *> link_proxy_ptr;
         uint32_t connected_node_id;
 
+        created_link_proxy(shared_ptr<pw_proxy *> link_proxy_ptr, uint32_t connected_node_id) {
+            this->link_proxy_ptr = link_proxy_ptr;
+            this->connected_node_id = connected_node_id;
+        }
+
+        ~created_link_proxy() {
+            if (*this->link_proxy_ptr) {
+                pw_proxy_destroy(*this->link_proxy_ptr);
+                *this->link_proxy_ptr = nullptr;
+            }
+        }
+    };
+
+    struct created_link_proxies_data {
+        vector<created_link_proxy *> link_proxies;
+
         ~created_link_proxies_data() {
-            for (auto &ptr : link_proxies) {
-                if (*ptr) {
-                    pw_proxy_destroy(*ptr);
-                    *ptr = nullptr;
+            for (auto *link_proxy : this->link_proxies) {
+                if (link_proxy) {
+                    delete link_proxy;
+                    link_proxy = nullptr;
                 }
             }
-            link_proxies.clear();
+            this->link_proxies.clear();
         }
     };
 
@@ -170,10 +190,6 @@ class PortLinksManager {
     };
 
     static unordered_map<uint32_t, link_infos *> node_id_to_link_infos;
-    /**
-     * THIS CAN LITERALLY ONLY STORE LINKS BETWEEN ONE PAIR OF NODES FOR A NODE
-     * FOR THE USECASE, WE ARE NOT CREATING LINKS BETWEEN MORE THAN ONE NODE FOR ANY NODE
-     */
     static unordered_map<uint32_t, created_link_proxies_data *> node_id_to_created_link_proxies;
     static vector<link_connect_task_data *> link_connect_tasks_list;
     static unordered_map<uint32_t, port_infos *> node_id_to_port_infos;
@@ -259,6 +275,10 @@ class PortLinksManager {
          */
         static void enqueue_link_connection_task(const uint32_t playback_node_id, const uint32_t capture_node_id,
                                                  pw_core &core, const uint32_t channels);
+
+        static void copy_playback_link_direction(pw_stream &modify_node, const uint32_t modify_node_id,
+                                                 pw_core &modify_node_core, const uint32_t modify_node_channels,
+                                                 const uint32_t node_id_to_copy, pw_registry *reg);
     };
 
     /**
@@ -564,4 +584,8 @@ class NodesManager {
      * @param output    Output struct populated with the created stream, context, and core for the capture node.
      */
     static void connect_capture_to_onode(const create_node_args &onode_args, create_node_output &output);
+
+    static void copy_playback_link_direction(pw_stream &modify_node, const uint32_t modify_node_id,
+                                             pw_core &modify_node_core, const uint32_t modify_node_channels,
+                                             const uint32_t node_id_to_copy, pw_registry *reg);
 };

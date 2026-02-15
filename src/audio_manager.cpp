@@ -1,7 +1,9 @@
 #include "includes/audio_manager.hpp"
 #include "includes/nodes_manager.hpp"
 #include "pipewire/core.h"
+#include "pipewire/stream.h"
 #include "spa/utils/dict.h"
+#include "spa/utils/hook.h"
 #include <build.h>
 #include <cstdint>
 #include <iostream>
@@ -177,28 +179,30 @@ void AudioManager::on_process_vnode_play_data(void *data) {
     }
 }
 
+void AudioManager::on_state_changed_vnode_copy_link_direction_single_callback(void *data, enum pw_stream_state old,
+                                                                              enum pw_stream_state state,
+                                                                              const char *error) {
+    if (state != PW_STREAM_STATE_PAUSED)
+        return;
+
+    auto *args = (AudioManagerArgs::on_state_changed_vnode_copy_link_direction_args *)data;
+
+    NodesManager::copy_playback_link_direction(args->vnode_stream, pw_stream_get_node_id(&args->vnode_stream),
+                                               args->vnode_core, args->vnode_channels, args->onode_id, &args->reg);
+
+    if (args->self_listener) {
+        spa_hook_remove(args->self_listener);
+        delete args->self_listener;
+        args->self_listener = nullptr;
+    }
+
+    delete args;
+    args = nullptr;
+}
+
 void *AudioManager::post_elec_node_process_hook(NodesManager::create_node_args *vnode_args, void *data) {
 
-    auto *onode_id = (uint32_t *)data;
-
-    // create a capture with links to the target node
-    NodesManager::create_node_output create_capture_output;
-    vnode_args->override_desc.app_icon_name = vnode_args->onode.app_process_binary;
-    vnode_args->override_desc.media_name = "Capture for " + vnode_args->onode.app_process_binary;
-    NodesManager::connect_capture_to_onode(*vnode_args, create_capture_output);
-
-    AudioStores::vnode_data &capture_node_data =
-        AudioStores::FriendAccessor::get_modifiable_capture_node_data(*onode_id);
-    capture_node_data.context = create_capture_output.context;
-    capture_node_data.core = create_capture_output.core;
-    capture_node_data.stream = create_capture_output.stream;
-    capture_node_data.id = 0;
-
-    vnode_args->override_desc.app_icon_name = "";
-    vnode_args->override_desc.media_name = "";
-    create_capture_output.context = nullptr;
-    create_capture_output.core = nullptr;
-    create_capture_output.stream = nullptr;
+    auto *args = (AudioManagerArgs::post_elec_node_process_hook_args *)data;
 
     // create replicate vnode (the one with correct name and icon)
     NodesManager::create_node_output replicate_vnode_output;
@@ -207,7 +211,7 @@ void *AudioManager::post_elec_node_process_hook(NodesManager::create_node_args *
     vnode_args->override_desc.media_name = string(PROJECT_NAME) + " " + vnode_args->onode.media_name;
     NodesManager::replicate_vnode(*vnode_args, replicate_vnode_output);
 
-    AudioStores::vnode_data &vnode_data = AudioStores::FriendAccessor::get_modifiable_vnode_data(*onode_id);
+    AudioStores::vnode_data &vnode_data = AudioStores::FriendAccessor::get_modifiable_vnode_data(args->onode_id);
     vnode_data.context = replicate_vnode_output.context;
     vnode_data.core = replicate_vnode_output.core;
     vnode_data.stream = replicate_vnode_output.stream;
@@ -220,6 +224,37 @@ void *AudioManager::post_elec_node_process_hook(NodesManager::create_node_args *
     vnode_args->override_desc.app_icon_name = "";
     vnode_args->override_desc.media_name = "";
 
+    // after creating vnode, change the vnode links to copy onode
+    static const pw_stream_events vnode_copy_link_event{
+        .version = PW_VERSION_STREAM_EVENTS,
+        .state_changed = on_state_changed_vnode_copy_link_direction_single_callback,
+    };
+
+    auto *state_changed_args = new AudioManagerArgs::on_state_changed_vnode_copy_link_direction_args(
+        args->onode_id, args->reg, *vnode_data.core, *vnode_data.stream, vnode_args->onode.audio_info.channels);
+
+    pw_stream_add_listener(vnode_data.stream, state_changed_args->self_listener, &vnode_copy_link_event,
+                           state_changed_args);
+
+    // create a capture with links to the target node
+    NodesManager::create_node_output create_capture_output;
+    vnode_args->override_desc.app_icon_name = vnode_args->onode.app_process_binary;
+    vnode_args->override_desc.media_name = "Capture for " + vnode_args->onode.app_process_binary;
+    NodesManager::connect_capture_to_onode(*vnode_args, create_capture_output);
+
+    AudioStores::vnode_data &capture_node_data =
+        AudioStores::FriendAccessor::get_modifiable_capture_node_data(args->onode_id);
+    capture_node_data.context = create_capture_output.context;
+    capture_node_data.core = create_capture_output.core;
+    capture_node_data.stream = create_capture_output.stream;
+    capture_node_data.id = 0;
+
+    vnode_args->override_desc.app_icon_name = "";
+    vnode_args->override_desc.media_name = "";
+    create_capture_output.context = nullptr;
+    create_capture_output.core = nullptr;
+    create_capture_output.stream = nullptr;
+
     delete vnode_args;
     vnode_args = nullptr;
 
@@ -230,7 +265,7 @@ void *AudioManager::post_elec_node_process_hook(NodesManager::create_node_args *
     };
 
     auto &transfer_audio_data = AudioStores::FriendAccessor::start_new_transfer_audio_data(
-        *onode_id, *capture_node_data.stream, *vnode_data.stream);
+        args->onode_id, *capture_node_data.stream, *vnode_data.stream);
 
     pw_stream_add_listener(capture_node_data.stream, transfer_audio_data.listeners[0], &capture_events,
                            &transfer_audio_data);
@@ -242,8 +277,8 @@ void *AudioManager::post_elec_node_process_hook(NodesManager::create_node_args *
 
     pw_stream_add_listener(vnode_data.stream, transfer_audio_data.listeners[1], &vnode_events, &transfer_audio_data);
 
-    delete onode_id;
-    onode_id = nullptr;
+    delete args;
+    args = nullptr;
 
     return nullptr;
 }
@@ -266,11 +301,11 @@ void AudioManager::process_playback_elec_node(pw_registry *reg, pw_loop *loop, u
     pw_node *elec_node = (pw_node *)pw_registry_bind(reg, id, type, PW_VERSION_NODE, 0);
     // FIXME: delete this bind after
 
-    uint32_t *onode_id = new uint32_t(id);
+    auto *hook_args = new AudioManagerArgs::post_elec_node_process_hook_args(id, *reg);
 
     NodesManager::process_new_node(elec_node, new NodesManager::nodes_manager_args_data(
                                                   *loop, AudioStores::FriendAccessor::get_modifiable_elec_node_info(id),
-                                                  AudioManager::post_elec_node_process_hook, onode_id));
+                                                  AudioManager::post_elec_node_process_hook, (void *)hook_args));
 }
 
 void AudioManager::enlist_registry_port_event(const uint32_t id, const struct spa_dict *props, pw_registry *reg) {

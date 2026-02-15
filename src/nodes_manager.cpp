@@ -16,11 +16,16 @@
 #include <build.h>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <set>
 #include <spa/param/audio/format-utils.h>
 #include <spa/pod/compare.h>
 #include <string>
 #include <sys/types.h>
 
+using std::make_shared;
+using std::pair;
+using std::set;
 using std::string;
 
 // ===== PORT LINKS MANAGER =====
@@ -84,15 +89,17 @@ void PortLinksManager::disconnect_links_from_node_with_link_info(const uint32_t 
 void PortLinksManager::store_created_link_proxy_between_nodes(pw_proxy *link, const uint32_t node_id_one,
                                                               const uint32_t node_id_two) {
     // TODO: log
-    auto &entry_one = get_modifiable_link_proxies(node_id_one);
-    auto &entry_two = get_modifiable_link_proxies(node_id_two);
 
-    entry_one.connected_node_id = node_id_two;
-    entry_two.connected_node_id = node_id_one;
+    shared_ptr<pw_proxy *> shared_link = make_shared<pw_proxy *>(link);
+    if (node_id_one != 0) {
+        auto &entry_one = get_modifiable_link_proxies(node_id_one);
+        entry_one.link_proxies.push_back(new created_link_proxy(shared_link, node_id_two));
+    }
 
-    auto link_ptr = new pw_proxy *(link);
-    entry_one.link_proxies.push_back(link_ptr);
-    entry_two.link_proxies.push_back(link_ptr);
+    if (node_id_two != 0) {
+        auto &entry_two = get_modifiable_link_proxies(node_id_two);
+        entry_two.link_proxies.push_back(new created_link_proxy(shared_link, node_id_one));
+    }
 }
 
 void PortLinksManager::NodeManagerAccessor::enqueue_link_connection_task(const uint32_t playback_node_id,
@@ -101,12 +108,30 @@ void PortLinksManager::NodeManagerAccessor::enqueue_link_connection_task(const u
     link_connect_tasks_list.push_back(new link_connect_task_data(playback_node_id, capture_node_id, core, channels));
 }
 
+void PortLinksManager::NodeManagerAccessor::copy_playback_link_direction(
+    pw_stream &modify_node, const uint32_t modify_node_id, pw_core &modify_node_core,
+    const uint32_t modify_node_channels, const uint32_t node_id_to_copy, pw_registry *reg) {
+    disconnect_links_from_node_with_link_info(modify_node_id, reg);
+
+    set<uint32_t> capture_node_ids = {};
+    const link_infos &links = get_modifiable_link_infos_entry(node_id_to_copy);
+
+    for (auto &link : links.links_list) {
+        if (!link->is_output_direction)
+            continue;
+
+        capture_node_ids.insert(link->connected_to_node_id);
+    }
+
+    for (auto capture_node_id : capture_node_ids) {
+        enqueue_link_connection_task(modify_node_id, capture_node_id, modify_node_core, modify_node_channels);
+    }
+}
+
 void PortLinksManager::work_link_connect_task(pw_registry *reg) {
     const auto &port_infos_map = get_port_infos_map();
 
     for (size_t i = 0; i < link_connect_tasks_list.size(); i++) {
-        uint32_t link_connected = 0;
-
         link_connect_task_data *task = link_connect_tasks_list[i];
         const uint32_t playback_node_id = task->playback_node;
         const uint32_t capture_node_id = task->capture_node;
@@ -117,16 +142,10 @@ void PortLinksManager::work_link_connect_task(pw_registry *reg) {
         if (port_infos_map.find(playback_node_id) == port_infos_map.end())
             continue;
 
-        // disconnect all links from the playback (electron node)
-        disconnect_links_from_node_with_link_info(playback_node_id, reg);
-
-        // since we are going to be adding links between these two, make sure we remove any current links between the
-        // two
-        remove_created_link_proxies_with_node_id(playback_node_id);
-        remove_created_link_proxies_with_node_id(capture_node_id);
-
         const vector<port_info *> &playback_ports = port_infos_map.at(playback_node_id)->ports_list;
         const vector<port_info *> &capture_ports = port_infos_map.at(capture_node_id)->ports_list;
+
+        vector<pair<uint32_t, uint32_t>> port_pairs = {}; // playback first, then capture id
 
         for (const port_info *playback_port : playback_ports) {
             if (playback_port->port_direction != "out")
@@ -137,26 +156,31 @@ void PortLinksManager::work_link_connect_task(pw_registry *reg) {
                     continue;
 
                 if (capture_port->audio_channel == playback_port->audio_channel) {
-
-                    char output_port_id[32], input_port_id[32];
-                    snprintf(output_port_id, sizeof(output_port_id), "%u", playback_port->id);
-                    snprintf(input_port_id, sizeof(input_port_id), "%u", capture_port->id);
-
-                    pw_properties *props = pw_properties_new(PW_KEY_LINK_OUTPUT_PORT, output_port_id,
-                                                             PW_KEY_LINK_INPUT_PORT, input_port_id, nullptr);
-
-                    void *link = pw_core_create_object(&task->core, "link-factory", PW_TYPE_INTERFACE_Link,
-                                                       PW_VERSION_LINK, &props->dict, 0);
-
-                    if (link != nullptr) {
-                        store_created_link_proxy_between_nodes((pw_proxy *)link, playback_node_id, capture_node_id);
-                        link_connected++;
-                    }
+                    port_pairs.push_back({playback_port->id, capture_port->id});
                 }
             }
         }
 
-        if (link_connected >= task->channels) {
+        if (port_pairs.size() >= task->channels) {
+            // disconnect all links from the playback (electron node)
+            disconnect_links_from_node_with_link_info(playback_node_id, reg);
+
+            for (auto pair : port_pairs) {
+                char output_port_id[32], input_port_id[32];
+                snprintf(output_port_id, sizeof(output_port_id), "%u", pair.first);
+                snprintf(input_port_id, sizeof(input_port_id), "%u", pair.second);
+
+                pw_properties *props = pw_properties_new(PW_KEY_LINK_OUTPUT_PORT, output_port_id,
+                                                         PW_KEY_LINK_INPUT_PORT, input_port_id, nullptr);
+
+                void *link = pw_core_create_object(&task->core, "link-factory", PW_TYPE_INTERFACE_Link, PW_VERSION_LINK,
+                                                   &props->dict, 0);
+
+                if (link != nullptr) {
+                    store_created_link_proxy_between_nodes((pw_proxy *)link, playback_node_id, capture_node_id);
+                }
+            }
+
             delete task;
             task = nullptr;
             link_connect_tasks_list.erase(link_connect_tasks_list.begin() + i);
@@ -175,11 +199,31 @@ void PortLinksManager::remove_created_link_proxies_with_node_id(const uint32_t n
     if (node_id_to_created_link_proxies.find(node_id) == node_id_to_created_link_proxies.end())
         return;
 
-    const uint32_t connected_node_id = node_id_to_created_link_proxies.at(node_id)->connected_node_id;
+    // we have to search for entries with these keys and delete link_proxies that is connected with node_id
+    set<uint32_t> connected_node_ids = {};
+
+    const created_link_proxies_data &link_proxies_data = get_modifiable_link_proxies(node_id);
+    for (auto &link_proxy : link_proxies_data.link_proxies) {
+        connected_node_ids.insert(link_proxy->connected_node_id);
+    }
 
     remove_entry_with_node_id(node_id, node_id_to_created_link_proxies);
-    if (node_id_to_created_link_proxies.find(connected_node_id) != node_id_to_created_link_proxies.end()) {
-        remove_entry_with_node_id(connected_node_id, node_id_to_created_link_proxies);
+
+    // removing specific `created_link_proxy` object that are connected to the node_id we are removing from other node
+    // maps
+    for (uint32_t id : connected_node_ids) {
+        created_link_proxies_data &link_proxies_data = get_modifiable_link_proxies(id);
+
+        for (size_t i = 0; i < link_proxies_data.link_proxies.size(); i++) {
+            auto &link_proxy = link_proxies_data.link_proxies[i];
+
+            if (link_proxy->connected_node_id != node_id)
+                continue;
+
+            delete link_proxy;
+            link_proxies_data.link_proxies.erase(link_proxies_data.link_proxies.begin() + i);
+            i--;
+        }
     }
 }
 
@@ -402,15 +446,15 @@ void NodesManager::replicate_vnode(const NodesManager::create_node_args &args,
 
     if (args.onode.media_class.find("Output") != string::npos || args.onode.media_class.find("Sink") != string::npos)
         pw_stream_connect(virtual_stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
-                          (enum pw_stream_flags)(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS), params, 1);
+                          (enum pw_stream_flags)(PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS), params, 1);
 
     else if (args.onode.media_class.find("Input") != string::npos ||
              args.onode.media_class.find("Source") != string::npos)
         pw_stream_connect(virtual_stream, PW_DIRECTION_INPUT, PW_ID_ANY,
-                          (enum pw_stream_flags)(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS), params, 1);
+                          (enum pw_stream_flags)(PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS), params, 1);
     else
         pw_stream_connect(virtual_stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
-                          (enum pw_stream_flags)(PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS), params, 1);
+                          (enum pw_stream_flags)(PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS), params, 1);
 }
 
 void NodesManager::connect_capture_to_onode(const create_node_args &onode_args, create_node_output &output) {
@@ -451,4 +495,11 @@ void NodesManager::connect_capture_to_onode(const create_node_args &onode_args, 
     };
 
     pw_stream_add_listener(stream, callback_args->self_listener, &stream_events, callback_args);
+}
+
+void NodesManager::copy_playback_link_direction(pw_stream &modify_node, const uint32_t modify_node_id,
+                                                pw_core &modify_node_core, const uint32_t modify_node_channels,
+                                                const uint32_t node_id_to_copy, pw_registry *reg) {
+    PortLinksManager::NodeManagerAccessor::copy_playback_link_direction(modify_node, modify_node_id, modify_node_core,
+                                                                        modify_node_channels, node_id_to_copy, reg);
 }

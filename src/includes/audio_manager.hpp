@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nodes_manager.hpp"
+#include "pipewire/core.h"
 #include "pipewire/stream.h"
 #include <array>
 #include <cstdint>
@@ -17,6 +18,43 @@ using std::queue;
 using std::string;
 using std::unordered_map;
 using std::vector;
+
+class AudioManagerArgs {
+  private:
+    friend class AudioManager;
+
+    struct post_elec_node_process_hook_args {
+        const uint32_t onode_id;
+        pw_registry &reg;
+
+        post_elec_node_process_hook_args(const uint32_t onode_id, pw_registry &reg) : onode_id(onode_id), reg(reg) {
+        }
+    };
+
+    struct on_state_changed_vnode_copy_link_direction_args {
+        const uint32_t onode_id;
+        pw_registry &reg;
+        pw_core &vnode_core;
+        pw_stream &vnode_stream;
+        const uint32_t vnode_channels;
+        spa_hook *self_listener;
+
+        on_state_changed_vnode_copy_link_direction_args(const uint32_t onode_id, pw_registry &reg, pw_core &vnode_core,
+                                                        pw_stream &vnode_stream, const uint32_t vnode_channels)
+            : onode_id(onode_id), reg(reg), vnode_core(vnode_core), vnode_stream(vnode_stream),
+              vnode_channels(vnode_channels) {
+            this->self_listener = new spa_hook();
+        }
+
+        ~on_state_changed_vnode_copy_link_direction_args() {
+            if (this->self_listener) {
+                spa_hook_remove(this->self_listener);
+                delete this->self_listener;
+                this->self_listener = nullptr;
+            }
+        }
+    };
+};
 
 /**
  * Stores essential information used by `AudioManager` inside three maps keyed by `onode_id`:
@@ -120,6 +158,11 @@ class AudioStores {
                     buffer->buffer->datas[i].chunk->size = audio_data.size();
 
                     this->audio_queue.pop();
+                } else {
+                    // added this because there were buzzing sound
+                    // i guess queuing an empty buffer causes buzzing
+                    memset(buffer->buffer->datas[i].data, 0, buffer->buffer->datas[i].maxsize);
+                    buffer->buffer->datas[i].chunk->size = buffer->buffer->datas[i].maxsize;
                 }
             }
         }
@@ -217,6 +260,10 @@ class AudioStores {
 class AudioManager {
   private:
     struct process_and_vnode_args_data;
+
+    static void on_state_changed_vnode_copy_link_direction_single_callback(void *data, enum pw_stream_state old,
+                                                                           enum pw_stream_state state,
+                                                                           const char *error);
 
     /**
      * Hook called after `NodesManager::process_new_node`
