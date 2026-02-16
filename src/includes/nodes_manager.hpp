@@ -4,12 +4,14 @@
 #include "pipewire/node.h"
 #include "pipewire/stream.h"
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <spa/param/audio/format-utils.h>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
+using std::function;
 using std::shared_ptr;
 using std::string;
 using std::unordered_map;
@@ -27,6 +29,8 @@ using std::vector;
  */
 class PortLinksManager {
   private:
+    static void log(string msg);
+
     /**
      * Removes and deletes the entry for `node_id` from the given map, if present.
      *
@@ -35,6 +39,10 @@ class PortLinksManager {
      */
     template <typename T>
     static void remove_entry_with_node_id(uint32_t node_id, unordered_map<uint32_t, T *> &map);
+
+    template <typename T>
+    static T &get_modifiable_entry(uint32_t key, unordered_map<uint32_t, T *> &map, function<T *()> factory,
+                                   string log_new_entry = "");
 
     /**
      * Link information collected from global registry event on PW_TYPE_INTERFACE_Link are stored in this struct. Meant
@@ -438,8 +446,10 @@ class NodesManager {
         pw_loop &loop;
         const node_info &onode;
         node_desc override_desc;
+        string node_group;
 
         create_node_args(pw_loop &loop, const NodesManager::node_info &onode) : loop(loop), onode(onode) {
+            this->node_group = "";
         }
     };
 

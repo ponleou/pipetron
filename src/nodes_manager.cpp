@@ -16,6 +16,7 @@
 #include <build.h>
 #include <cstddef>
 #include <cstdint>
+#include <iostream>
 #include <memory>
 #include <set>
 #include <spa/param/audio/format-utils.h>
@@ -23,6 +24,8 @@
 #include <string>
 #include <sys/types.h>
 
+using std::cout;
+using std::endl;
 using std::make_shared;
 using std::pair;
 using std::set;
@@ -32,16 +35,8 @@ using std::string;
 
 unordered_map<uint32_t, PortLinksManager::port_infos *> PortLinksManager::node_id_to_port_infos = {};
 
-const unordered_map<uint32_t, PortLinksManager::port_infos *> &PortLinksManager::get_port_infos_map() {
-    return node_id_to_port_infos;
-}
-
-PortLinksManager::port_infos &PortLinksManager::get_modifiable_port_infos_entry(uint32_t node_id) {
-    if (node_id_to_port_infos.find(node_id) == node_id_to_port_infos.end()) {
-        node_id_to_port_infos[node_id] = new port_infos();
-        // TODO: log, follow set_vnode
-    }
-    return *node_id_to_port_infos[node_id];
+void PortLinksManager::log(string msg) {
+    cout << msg << endl;
 }
 
 template <typename T>
@@ -53,6 +48,29 @@ void PortLinksManager::remove_entry_with_node_id(uint32_t node_id, unordered_map
         it->second = nullptr;
         map.erase(it);
     }
+}
+
+template <typename T>
+T &PortLinksManager::get_modifiable_entry(uint32_t key, unordered_map<uint32_t, T *> &map, function<T *()> factory,
+                                          string log_new_entry) {
+    if (map.find(key) == map.end()) {
+        map[key] = factory();
+
+        if (log_new_entry != "")
+            log(log_new_entry);
+    }
+
+    return *map[key];
+}
+
+const unordered_map<uint32_t, PortLinksManager::port_infos *> &PortLinksManager::get_port_infos_map() {
+    return node_id_to_port_infos;
+}
+
+PortLinksManager::port_infos &PortLinksManager::get_modifiable_port_infos_entry(uint32_t node_id) {
+
+    return get_modifiable_entry(node_id, node_id_to_port_infos,
+                                function<port_infos *()>([]() { return new port_infos(); }));
 }
 
 void PortLinksManager::cleanup_link_infos_with_node_id(uint32_t node_id) {
@@ -69,17 +87,20 @@ unordered_map<uint32_t, PortLinksManager::created_link_proxies_data *>
     PortLinksManager::node_id_to_created_link_proxies = {};
 
 PortLinksManager::link_infos &PortLinksManager::get_modifiable_link_infos_entry(uint32_t node_id) {
-    if (node_id_to_link_infos.find(node_id) == node_id_to_link_infos.end()) {
-        node_id_to_link_infos[node_id] = new link_infos();
-        // TODO: log, follow set_vnode
-    }
-    return *node_id_to_link_infos[node_id];
+    return get_modifiable_entry(node_id, node_id_to_link_infos,
+                                function<link_infos *()>([]() { return new link_infos(); }));
 }
 
 void PortLinksManager::disconnect_links_from_node_with_link_info(const uint32_t node_id, pw_registry *reg) {
     const link_infos &links = get_modifiable_link_infos_entry(node_id);
 
     for (auto &link : links.links_list) {
+
+        // this line for some reason is disconnecting clients from pulseaudio server
+        // for pavucontrol-qt, the app hangs
+        // for pavucontrol, it causes the app to reconnect to pulseaudio server
+        // for pwvucontrol, it is perfectly fine
+
         pw_registry_destroy(reg, link->id);
     }
 
@@ -91,15 +112,12 @@ void PortLinksManager::store_created_link_proxy_between_nodes(pw_proxy *link, co
     // TODO: log
 
     shared_ptr<pw_proxy *> shared_link = make_shared<pw_proxy *>(link);
-    if (node_id_one != 0) {
-        auto &entry_one = get_modifiable_link_proxies(node_id_one);
-        entry_one.link_proxies.push_back(new created_link_proxy(shared_link, node_id_two));
-    }
 
-    if (node_id_two != 0) {
-        auto &entry_two = get_modifiable_link_proxies(node_id_two);
-        entry_two.link_proxies.push_back(new created_link_proxy(shared_link, node_id_one));
-    }
+    auto &entry_one = get_modifiable_link_proxies(node_id_one);
+    entry_one.link_proxies.push_back(new created_link_proxy(shared_link, node_id_two));
+
+    auto &entry_two = get_modifiable_link_proxies(node_id_two);
+    entry_two.link_proxies.push_back(new created_link_proxy(shared_link, node_id_one));
 }
 
 void PortLinksManager::NodeManagerAccessor::enqueue_link_connection_task(const uint32_t playback_node_id,
@@ -428,7 +446,12 @@ void NodesManager::replicate_vnode(const NodesManager::create_node_args &args,
         PW_KEY_NODE_DESCRIPTION,
         (args.override_desc.node_description != "" ? args.override_desc.node_description : args.onode.node_description)
             .c_str(),
+        //
         nullptr);
+
+    if (args.node_group != "") {
+        pw_properties_set(stream_props, PW_KEY_NODE_GROUP, args.node_group.c_str());
+    }
 
     pw_stream *virtual_stream = pw_stream_new(
         virtual_core,
@@ -464,15 +487,19 @@ void NodesManager::connect_capture_to_onode(const create_node_args &onode_args, 
     char target[32];
     snprintf(target, sizeof(target), "%u", onode_args.onode.id);
 
-    pw_properties *stream_props = pw_properties_new(
-        PW_KEY_MEDIA_TYPE, "Audio",
-        //
-        PW_KEY_MEDIA_NAME,
+    pw_properties *stream_props = pw_properties_new(PW_KEY_MEDIA_TYPE, "Audio",
+                                                    //
+                                                    nullptr);
+
+    if (onode_args.node_group != "") {
+        pw_properties_set(stream_props, PW_KEY_NODE_GROUP, onode_args.node_group.c_str());
+    }
+
+    pw_stream *stream = pw_stream_new(
+        core,
         (onode_args.override_desc.media_name != "" ? onode_args.override_desc.media_name : onode_args.onode.media_name)
             .c_str(),
-        nullptr);
-
-    pw_stream *stream = pw_stream_new(core, PROJECT_NAME, stream_props);
+        stream_props);
 
     uint8_t buffer[1024];
     spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));

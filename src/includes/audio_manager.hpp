@@ -1,10 +1,19 @@
 #pragma once
 
 #include "nodes_manager.hpp"
+#include "pipewire/context.h"
 #include "pipewire/core.h"
+#include "pipewire/proxy.h"
 #include "pipewire/stream.h"
+#include "spa/param/audio/raw.h"
+#include "spa/param/props.h"
+#include "spa/utils/hook.h"
 #include <array>
+#include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <iostream>
+#include <mutex>
 #include <queue>
 #include <spa/param/audio/format-utils.h>
 #include <string>
@@ -13,9 +22,12 @@
 #include <vector>
 
 using std::array;
+using std::function;
 using std::move;
+using std::mutex;
 using std::queue;
 using std::string;
+using std::unique_lock;
 using std::unordered_map;
 using std::vector;
 
@@ -32,8 +44,18 @@ class AudioManagerArgs {
     struct post_elec_node_process_hook_args {
         const uint32_t onode_id;
         pw_registry &reg;
+        pw_node *onode;
 
-        post_elec_node_process_hook_args(const uint32_t onode_id, pw_registry &reg) : onode_id(onode_id), reg(reg) {
+        post_elec_node_process_hook_args(const uint32_t onode_id, pw_registry &reg, pw_node *elec_node)
+            : onode_id(onode_id), reg(reg) {
+            this->onode = elec_node;
+        }
+
+        ~post_elec_node_process_hook_args() {
+            if (this->onode) {
+                pw_proxy_destroy((pw_proxy *)this->onode);
+                this->onode = nullptr;
+            }
         }
     };
 
@@ -141,11 +163,21 @@ class AudioStores {
         pw_stream &vnode;
         queue<vector<uint8_t>> audio_queue;
         array<spa_hook *, 2> listeners;
+        mutex locker;
 
-        transfer_audio_data(pw_stream &capture_node, pw_stream &vnode) : capture_node(capture_node), vnode(vnode) {
+        bool one_time_sync;
+        int last_queue_size;
+        int queue_size_stable_count;
+        const int stable_time;
+
+        transfer_audio_data(pw_stream &capture_node, pw_stream &vnode)
+            : capture_node(capture_node), vnode(vnode), stable_time(200) {
             this->audio_queue = {};
             this->listeners[0] = new spa_hook();
             this->listeners[1] = new spa_hook();
+            this->one_time_sync = false;
+            this->last_queue_size = 0;
+            this->queue_size_stable_count = 0;
         }
 
         ~transfer_audio_data() {
@@ -160,6 +192,8 @@ class AudioStores {
         }
 
         void store_buffer_to_queue(pw_buffer *buffer) {
+            unique_lock<mutex> lock(this->locker);
+
             if (buffer == nullptr)
                 return;
 
@@ -172,8 +206,27 @@ class AudioStores {
         }
 
         void load_buffer_from_queue(pw_buffer *buffer) {
+            unique_lock<mutex> lock(this->locker);
+
             if (buffer == nullptr)
                 return;
+
+            if (!one_time_sync) {
+                if (this->last_queue_size - (3 * buffer->buffer->n_datas) <= this->audio_queue.size() &&
+                    this->last_queue_size + (3 * buffer->buffer->n_datas) >= this->audio_queue.size()) {
+                    this->queue_size_stable_count++;
+                } else {
+                    this->queue_size_stable_count = 0;
+                }
+                this->last_queue_size = this->audio_queue.size();
+
+                if (this->queue_size_stable_count >= this->stable_time) {
+                    this->one_time_sync = true;
+                    while (this->audio_queue.size() > buffer->buffer->n_datas) {
+                        this->audio_queue.pop();
+                    }
+                }
+            }
 
             for (uint32_t i = 0; i < buffer->buffer->n_datas; i++) {
                 if (!this->audio_queue.empty()) {
@@ -193,6 +246,94 @@ class AudioStores {
         }
     };
 
+    struct lock_stream_param_data {
+        pw_stream &stream;
+        spa_pod *param;
+        spa_hook *self_listener;
+
+        lock_stream_param_data(pw_stream &stream, const spa_audio_info_raw &audio_info) : stream(stream) {
+            this->self_listener = new spa_hook();
+
+            uint8_t buffer[1024];
+            spa_pod_builder b;
+            spa_pod_builder_init(&b, buffer, sizeof(buffer));
+
+            float volumes[audio_info.channels];
+            for (int i = 0; i < audio_info.channels; i++)
+                volumes[i] = 1.0f;
+
+            spa_pod *temp = (spa_pod *)spa_pod_builder_add_object(
+                &b, SPA_TYPE_OBJECT_Props, SPA_PARAM_Props, SPA_PROP_volume, SPA_POD_Float(1.0f),
+                SPA_PROP_channelVolumes, SPA_POD_Array(sizeof(float), SPA_TYPE_Float, audio_info.channels, volumes),
+                SPA_PROP_channelMap,
+                SPA_POD_Array(sizeof(uint32_t), SPA_TYPE_Id, audio_info.channels, audio_info.position), SPA_PROP_mute,
+                SPA_POD_Bool(false));
+
+            this->param = spa_pod_copy(temp);
+        }
+
+        ~lock_stream_param_data() {
+            if (this->self_listener) {
+                spa_hook_remove(this->self_listener);
+                delete this->self_listener;
+                this->self_listener = nullptr;
+            }
+
+            if (this->param) {
+                free(this->param);
+                this->param = nullptr;
+            }
+        }
+    };
+
+    struct lock_node_param_data {
+        pw_node *node;
+        spa_pod *param;
+        spa_hook *self_listener;
+        bool ignore_next_param_event;
+
+        lock_node_param_data(pw_node *node, const spa_audio_info_raw &audio_info) {
+            this->node = node;
+            this->self_listener = new spa_hook();
+            this->ignore_next_param_event = false;
+
+            uint8_t buffer[1024];
+            spa_pod_builder b;
+            spa_pod_builder_init(&b, buffer, sizeof(buffer));
+
+            float volumes[audio_info.channels];
+            for (int i = 0; i < audio_info.channels; i++)
+                volumes[i] = 1.0f;
+
+            spa_pod *temp = (spa_pod *)spa_pod_builder_add_object(
+                &b, SPA_TYPE_OBJECT_Props, SPA_PARAM_Props, SPA_PROP_volume, SPA_POD_Float(1.0f),
+                SPA_PROP_channelVolumes, SPA_POD_Array(sizeof(float), SPA_TYPE_Float, audio_info.channels, volumes),
+                SPA_PROP_channelMap,
+                SPA_POD_Array(sizeof(uint32_t), SPA_TYPE_Id, audio_info.channels, audio_info.position), SPA_PROP_mute,
+                SPA_POD_Bool(false));
+
+            this->param = spa_pod_copy(temp);
+        }
+
+        ~lock_node_param_data() {
+            if (this->node) {
+                pw_proxy_destroy((pw_proxy *)this->node);
+                this->node = nullptr;
+            }
+
+            if (this->self_listener) {
+                spa_hook_remove(this->self_listener);
+                delete this->self_listener;
+                this->self_listener = nullptr;
+            }
+
+            if (this->param) {
+                free(this->param);
+                this->param = nullptr;
+            }
+        }
+    };
+
   private:
     static unordered_map<uint32_t, NodesManager::node_info *> omic_infos;
 
@@ -201,6 +342,9 @@ class AudioStores {
     static unordered_map<uint32_t, AudioStores::vnode_data *> elec_node_to_capture_node_data;
 
     static unordered_map<uint32_t, AudioStores::transfer_audio_data *> elec_node_to_transfer_audio_data;
+    static unordered_map<uint32_t, lock_node_param_data *> node_id_to_lock_node_param;
+    static unordered_map<uint32_t, lock_stream_param_data *> elec_node_to_lock_stream_param;
+
     /**
      * Removes and deletes the entry for `node_id` from the given map, if present.
      *
@@ -220,6 +364,10 @@ class AudioStores {
      * @return          true if the binary name was found and set to `name`, false otherwise.
      */
     static bool get_elec_node_binary_name(uint32_t node_id, string &name);
+
+    template <typename T>
+    static T *get_modifiable_entry(uint32_t key, unordered_map<uint32_t, T *> &map, function<T *()> factory,
+                                   string log_new_entry = "");
 
   public:
     /**
@@ -254,6 +402,12 @@ class AudioStores {
          * @return reference to the `elec_node_info` entry for `elec_node_id` key.
          */
         static NodesManager::node_info &get_modifiable_elec_node_info(uint32_t elec_node_id);
+
+        static lock_node_param_data &start_new_lock_node_param_data(uint32_t node_id, pw_node *node,
+                                                                    const spa_audio_info_raw &audio_info);
+
+        static lock_stream_param_data &start_new_lock_stream_param_data(uint32_t elec_node_id, pw_stream &stream,
+                                                                        const spa_audio_info_raw &audio_info);
 
         /**
          * Deletes existing `transfer_audio_data` instance in `elec_node_id` entry from
@@ -293,17 +447,6 @@ class AudioManager {
     struct process_and_vnode_args_data;
 
     /**
-     * `vnode` 's single callback for `state_changed` event, which on `PW_STREAM_STATE_PAUSED`, will get the stream's ID
-     * and call NodeManager's `copy_playback_link_direction` for `vnode` as modifying node, and the electron (original)
-     * node as node to be copied. Will delete its own `self_listener` from `data` after a successful run.
-     *
-     * @param data `on_state_changed_vnode_copy_link_direction_args` instance data
-     */
-    static void on_state_changed_vnode_copy_link_direction_single_callback(void *data, enum pw_stream_state old,
-                                                                           enum pw_stream_state state,
-                                                                           const char *error);
-
-    /**
      * Hook called after `NodesManager::process_new_node`
      *
      * It creates a virtual node to replicate the playback electron node, and a capture node to capture the electron
@@ -331,6 +474,22 @@ class AudioManager {
      * @param data        The pointer to the data from `NodesManager::process_new_node` 's post hook arguments
      */
     static void *post_mic_process_hook(NodesManager::create_node_args *vnode_args, void *data);
+
+    /**
+     * `vnode` 's single callback for `state_changed` event, which on `PW_STREAM_STATE_PAUSED`, will get the stream's ID
+     * and call NodeManager's `copy_playback_link_direction` for `vnode` as modifying node, and the electron (original)
+     * node as node to be copied. Will delete its own `self_listener` from `data` after a successful run.
+     *
+     * @param data `on_state_changed_vnode_copy_link_direction_args` instance data
+     */
+    static void on_state_changed_vnode_copy_link_direction_single_callback(void *data, enum pw_stream_state old,
+                                                                           enum pw_stream_state state,
+                                                                           const char *error);
+
+    static void on_param_props_lock_onode_params(void *data, int seq, uint32_t id, uint32_t index, uint32_t next,
+                                                 const struct spa_pod *param);
+
+    static void on_param_changed_props_lock_stream_params(void *data, uint32_t id, const struct spa_pod *param);
 
   public:
     /**
