@@ -24,8 +24,8 @@ unordered_map<uint32_t, NodesManager::node_info *> AudioStores::elec_node_infos 
 unordered_map<uint32_t, AudioStores::vnode_data *> AudioStores::elec_node_to_vnode_data = {};
 unordered_map<uint32_t, AudioStores::vnode_data *> AudioStores::elec_node_to_capture_node_data = {};
 unordered_map<uint32_t, AudioStores::transfer_audio_data *> AudioStores::elec_node_to_transfer_audio_data = {};
-unordered_map<uint32_t, AudioStores::lock_node_param_data *> AudioStores::node_id_to_lock_node_param = {};
-unordered_map<uint32_t, AudioStores::lock_stream_param_data *> AudioStores::elec_node_to_lock_stream_param = {};
+unordered_map<uint32_t, AudioStores::lock_elec_node_param_data *> AudioStores::lock_elec_node_param_datas = {};
+unordered_map<uint32_t, AudioStores::lock_stream_param_data *> AudioStores::elec_node_to_lock_stream_param_data = {};
 
 template <typename T>
 void AudioStores::remove_entry_with_node_id(uint32_t node_id, unordered_map<uint32_t, T *> &map) {
@@ -86,28 +86,28 @@ NodesManager::node_info &AudioStores::FriendAccessor::get_modifiable_elec_node_i
                                  "New pipewire node ID " + to_string(elec_node_id) + " detected");
 }
 
-AudioStores::lock_node_param_data &
-AudioStores::FriendAccessor::start_new_lock_node_param_data(uint32_t node_id, pw_node *node,
-                                                            const spa_audio_info_raw &audio_info) {
-    if (node_id_to_lock_node_param.find(node_id) != node_id_to_lock_node_param.end()) {
-        remove_entry_with_node_id(node_id, node_id_to_lock_node_param);
+AudioStores::lock_elec_node_param_data &
+AudioStores::FriendAccessor::start_new_lock_elec_node_param_data(uint32_t elec_node_id, pw_node *elec_node,
+                                                                 const spa_audio_info_raw &audio_info) {
+    if (lock_elec_node_param_datas.find(elec_node_id) != lock_elec_node_param_datas.end()) {
+        remove_entry_with_node_id(elec_node_id, lock_elec_node_param_datas);
     }
 
-    node_id_to_lock_node_param[node_id] = new lock_node_param_data(node, audio_info);
+    lock_elec_node_param_datas[elec_node_id] = new lock_elec_node_param_data(elec_node, audio_info);
 
-    return *node_id_to_lock_node_param[node_id];
+    return *lock_elec_node_param_datas[elec_node_id];
 }
 
 AudioStores::lock_stream_param_data &
 AudioStores::FriendAccessor::start_new_lock_stream_param_data(uint32_t elec_node_id, pw_stream &stream,
                                                               const spa_audio_info_raw &audio_info) {
-    if (elec_node_to_lock_stream_param.find(elec_node_id) != elec_node_to_lock_stream_param.end()) {
-        remove_entry_with_node_id(elec_node_id, elec_node_to_lock_stream_param);
+    if (elec_node_to_lock_stream_param_data.find(elec_node_id) != elec_node_to_lock_stream_param_data.end()) {
+        remove_entry_with_node_id(elec_node_id, elec_node_to_lock_stream_param_data);
     }
 
-    elec_node_to_lock_stream_param[elec_node_id] = new lock_stream_param_data(stream, audio_info);
+    elec_node_to_lock_stream_param_data[elec_node_id] = new lock_stream_param_data(stream, audio_info);
 
-    return *elec_node_to_lock_stream_param[elec_node_id];
+    return *elec_node_to_lock_stream_param_data[elec_node_id];
 }
 
 AudioStores::transfer_audio_data &AudioStores::FriendAccessor::start_new_transfer_audio_data(uint32_t elec_node_id,
@@ -143,8 +143,8 @@ void AudioStores::FriendAccessor::cleanup_stores_with_elec_node_id(uint32_t elec
     remove_entry_with_node_id(elec_node_id, elec_node_to_transfer_audio_data);
     remove_entry_with_node_id(elec_node_id, elec_node_to_vnode_data);
     remove_entry_with_node_id(elec_node_id, elec_node_to_capture_node_data);
-    remove_entry_with_node_id(elec_node_id, node_id_to_lock_node_param);
-    remove_entry_with_node_id(elec_node_id, elec_node_to_lock_stream_param);
+    remove_entry_with_node_id(elec_node_id, lock_elec_node_param_datas);
+    remove_entry_with_node_id(elec_node_id, elec_node_to_lock_stream_param_data);
 }
 
 void AudioStores::FriendAccessor::cleanup() {
@@ -163,11 +163,11 @@ void AudioStores::FriendAccessor::cleanup() {
     for (const auto &[key, value] : elec_node_to_capture_node_data)
         remove_entry_with_node_id(key, elec_node_to_capture_node_data);
 
-    for (const auto &[key, value] : node_id_to_lock_node_param)
-        remove_entry_with_node_id(key, node_id_to_lock_node_param);
+    for (const auto &[key, value] : lock_elec_node_param_datas)
+        remove_entry_with_node_id(key, lock_elec_node_param_datas);
 
-    for (const auto &[key, value] : elec_node_to_lock_stream_param)
-        remove_entry_with_node_id(key, elec_node_to_lock_stream_param);
+    for (const auto &[key, value] : elec_node_to_lock_stream_param_data)
+        remove_entry_with_node_id(key, elec_node_to_lock_stream_param_data);
 }
 
 // ========= END OF AUDIO STORES =========
@@ -246,12 +246,12 @@ void AudioManager::on_state_changed_vnode_copy_link_direction_single_callback(vo
     args = nullptr;
 }
 
-void AudioManager::on_param_props_lock_onode_params(void *data, int seq, uint32_t id, uint32_t index, uint32_t next,
-                                                    const struct spa_pod *param) {
+void AudioManager::on_param_props_lock_onode_params_callback(void *data, int seq, uint32_t id, uint32_t index,
+                                                             uint32_t next, const struct spa_pod *param) {
     if (id != SPA_PARAM_Props)
         return;
 
-    auto *lock_param_data = (AudioStores::lock_node_param_data *)data;
+    auto *lock_param_data = (AudioStores::lock_elec_node_param_data *)data;
 
     if (lock_param_data->ignore_next_param_event) {
         lock_param_data->ignore_next_param_event = false;
@@ -259,10 +259,11 @@ void AudioManager::on_param_props_lock_onode_params(void *data, int seq, uint32_
     }
 
     lock_param_data->ignore_next_param_event = true;
-    pw_node_set_param(lock_param_data->node, SPA_PARAM_Props, 0, lock_param_data->param);
+    pw_node_set_param(lock_param_data->elec_node, SPA_PARAM_Props, 0, lock_param_data->param);
 }
 
-void AudioManager::on_param_changed_props_lock_stream_params(void *data, uint32_t id, const struct spa_pod *param) {
+void AudioManager::on_param_changed_props_lock_stream_params_callback(void *data, uint32_t id,
+                                                                      const struct spa_pod *param) {
     if (id != SPA_PARAM_Props)
         return;
 
@@ -329,7 +330,7 @@ void *AudioManager::post_elec_node_process_hook(NodesManager::create_node_args *
     pw_node *elec_node = args->onode;
     args->onode = nullptr;
 
-    const auto &lock_node_param = AudioStores::FriendAccessor::start_new_lock_node_param_data(
+    const auto &lock_node_param = AudioStores::FriendAccessor::start_new_lock_elec_node_param_data(
         args->onode_id, elec_node, vnode_args->onode.audio_info);
 
     const auto &lock_stream_param = AudioStores::FriendAccessor::start_new_lock_stream_param_data(
@@ -341,18 +342,19 @@ void *AudioManager::post_elec_node_process_hook(NodesManager::create_node_args *
     // starting event for locking onode/electron node and capture stream volume level
     static const pw_node_events lock_node_param_event = {
         .version = PW_VERSION_NODE_EVENTS,
-        .param = on_param_props_lock_onode_params,
+        .param = on_param_props_lock_onode_params_callback,
     };
     uint32_t param_ids_sub[] = {SPA_PARAM_Props};
 
-    pw_node_subscribe_params(lock_node_param.node, param_ids_sub, sizeof(param_ids_sub) / sizeof(param_ids_sub[0]));
+    pw_node_subscribe_params(lock_node_param.elec_node, param_ids_sub,
+                             sizeof(param_ids_sub) / sizeof(param_ids_sub[0]));
 
     static const pw_stream_events lock_stream_param_event = {
         .version = PW_VERSION_STREAM_EVENTS,
-        .param_changed = on_param_changed_props_lock_stream_params,
+        .param_changed = on_param_changed_props_lock_stream_params_callback,
     };
 
-    pw_proxy_add_object_listener((pw_proxy *)lock_node_param.node, lock_node_param.self_listener,
+    pw_proxy_add_object_listener((pw_proxy *)lock_node_param.elec_node, lock_node_param.self_listener,
                                  &lock_node_param_event, (void *)&lock_node_param);
 
     pw_stream_add_listener(&lock_stream_param.stream, lock_stream_param.self_listener, &lock_stream_param_event,

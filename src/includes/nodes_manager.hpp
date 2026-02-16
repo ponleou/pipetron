@@ -34,12 +34,21 @@ class PortLinksManager {
     /**
      * Removes and deletes the entry for `node_id` from the given map, if present.
      *
-     * @param node_id  The `onode_id` entry to delete from the map
+     * @param node_id   The `onode_id` entry to delete from the map
      * @param map       The map to remove the entry from
      */
     template <typename T>
     static void remove_entry_with_node_id(uint32_t node_id, unordered_map<uint32_t, T *> &map);
 
+    /**
+     * A generic function used by other `get_modifiable_*` functions. Lazily creates an entry for the key with the
+     * factory if its not available, and returns a reference to the key's entry of the map.
+     *
+     * @param key           ID/number key for the map
+     * @param map           a map between ID/key to a generic pointer type
+     * @param factory       function used to construct the generic pointer for creating a new entry
+     * @param log_new_entry string to print out to `cout` when a new entry is created
+     */
     template <typename T>
     static T &get_modifiable_entry(uint32_t key, unordered_map<uint32_t, T *> &map, function<T *()> factory,
                                    string log_new_entry = "");
@@ -441,6 +450,8 @@ class NodesManager {
      * @param onode         The original node's metadata used to replicate its properties.
      * @param override_desc Optional node descriptions that will override `node_info` 's metadata when replicating
      * properties.
+     * @param node_group    Unique string to set `node.group` props to the created nodes. This will allow nodes within
+     * the group to have a synced clock (for removing process callback delays)
      */
     struct create_node_args {
         pw_loop &loop;

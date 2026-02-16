@@ -38,8 +38,10 @@ class AudioManagerArgs {
     /**
      * Args struct passed to `post_elec_node_process_hook` function.
      *
-     * @param onode_id the node ID of the original/electron node
-     * @param reg pw_registry reference which will be used to create `on_state_changed_vnode_copy_link_direction_args`
+     * @param onode_id  the node ID of the original/electron node
+     * @param reg       pw_registry reference which will be used to create
+     * `on_state_changed_vnode_copy_link_direction_args`
+     * @param onode     the pw_node pointer of the electron/original node
      */
     struct post_elec_node_process_hook_args {
         const uint32_t onode_id;
@@ -149,11 +151,21 @@ class AudioStores {
      * virtual node, which are responsible for copying audio data from the capture node into the virtual node for
      * playback. Has all the essential data to keep `process` callback running and copying audio data in isolation.
      *
-     * @param capture_node  the capture node's pw_stream object, used to dequeue buffer and copy audio data into queue
-     * @param vnode         the playback virtual node's pw_stream object, used to dequeue buffer and copy audio data
-     * from queue
-     * @param audio_queue   contains audio data in queue from `capture_node` to be taken by `vnode` playback
-     * @param listeners     holds pointers to the two `process` listeners for `capture_node` and `vnode`
+     * @param capture_node              the capture node's pw_stream object, used to dequeue buffer and copy audio data
+     * into queue
+     * @param vnode                     the playback virtual node's pw_stream object, used to dequeue buffer and copy
+     * audio data from queue
+     * @param audio_queue               contains audio data in queue from `capture_node` to be taken by `vnode` playback
+     * @param listeners                 holds pointers to the two `process` listeners for `capture_node` and `vnode`
+     * @param locker                    mutex to control multithreaded queue access. `process` callback between capture
+     * and vnode are RT safe and runs on different threads
+     * @param one_time_sync             a boolean switch to determine whether a sync has been initiated. Once initiated,
+     * there wont be another
+     * @param last_queue_size           the size of the queue on the previous `store_buffer_to_queue` call
+     * @param queue_size_stable_count   an incremental counter on each `store_buffer_to_queue` call that increments
+     * every time the current queue size is within the negligible range of `last_queue_size`
+     * @param stable_count              a constant number that the queue is considered stable when
+     * `queue_size_stable_count` is more than or equal to
      *
      * @param store_buffer_to_queue   called by `capture_node` 's process callback to store buffer data into the queue
      * @param load_buffer_from_queue  called by `vnode` 's process callback to copy data from queue into its buffer
@@ -211,15 +223,28 @@ class AudioStores {
             if (buffer == nullptr)
                 return;
 
+            // a sync process, will only run once (by removing stacked data in the queue) when the process callbacks are
+            // stable
             if (!one_time_sync) {
+
+                // we check the callbacks are stable by:
+                //  1. ensuring the current queue size is within a negligible range from the previous callback queue
+                //     size, measuring stability
+                //  2. the queue size is stable for `stable_time` (which is 200) callbacks, the count resets to 0 if it
+                //     is not stable for one callback
+
+                // checking the range, negligible defined by +- (3 * n_datas)
                 if (this->last_queue_size - (3 * buffer->buffer->n_datas) <= this->audio_queue.size() &&
                     this->last_queue_size + (3 * buffer->buffer->n_datas) >= this->audio_queue.size()) {
                     this->queue_size_stable_count++;
                 } else {
                     this->queue_size_stable_count = 0;
                 }
+
                 this->last_queue_size = this->audio_queue.size();
 
+                // if it is stable for `stable_time`, sync by removing all stacked audio data (until theres only n_datas
+                // left in the queue)
                 if (this->queue_size_stable_count >= this->stable_time) {
                     this->one_time_sync = true;
                     while (this->audio_queue.size() > buffer->buffer->n_datas) {
@@ -246,6 +271,74 @@ class AudioStores {
         }
     };
 
+    /**
+     * A struct used to maintain an electron node's `param` SPA_PARAM_Props callback that will lock its volume params to
+     * 100%. The struct maintains the electron node's registry bind pointer.
+     *
+     * @param elec_node the pw_node pointer to the electron node, binded with its ID
+     * @param param the param value (constructed to contain master volume and channel volume to 100%) that `elec_node`
+     * will be locked to
+     * @param self_listener listener that maintains the `param` callback
+     * @param ignore_next_param_event boolean that will notify to return on a `param` callback, used to eliminate
+     * callback loop when modifying the node's param
+     */
+    struct lock_elec_node_param_data {
+        pw_node *elec_node;
+        spa_pod *param;
+        spa_hook *self_listener;
+        bool ignore_next_param_event;
+
+        lock_elec_node_param_data(pw_node *elec_node, const spa_audio_info_raw &audio_info) {
+            this->elec_node = elec_node;
+            this->self_listener = new spa_hook();
+            this->ignore_next_param_event = false;
+
+            uint8_t buffer[1024];
+            spa_pod_builder b;
+            spa_pod_builder_init(&b, buffer, sizeof(buffer));
+
+            float volumes[audio_info.channels];
+            for (int i = 0; i < audio_info.channels; i++)
+                volumes[i] = 1.0f;
+
+            spa_pod *temp = (spa_pod *)spa_pod_builder_add_object(
+                &b, SPA_TYPE_OBJECT_Props, SPA_PARAM_Props, SPA_PROP_volume, SPA_POD_Float(1.0f),
+                SPA_PROP_channelVolumes, SPA_POD_Array(sizeof(float), SPA_TYPE_Float, audio_info.channels, volumes),
+                SPA_PROP_channelMap,
+                SPA_POD_Array(sizeof(uint32_t), SPA_TYPE_Id, audio_info.channels, audio_info.position), SPA_PROP_mute,
+                SPA_POD_Bool(false));
+
+            this->param = spa_pod_copy(temp);
+        }
+
+        ~lock_elec_node_param_data() {
+            if (this->elec_node) {
+                pw_proxy_destroy((pw_proxy *)this->elec_node);
+                this->elec_node = nullptr;
+            }
+
+            if (this->self_listener) {
+                spa_hook_remove(this->self_listener);
+                delete this->self_listener;
+                this->self_listener = nullptr;
+            }
+
+            if (this->param) {
+                free(this->param);
+                this->param = nullptr;
+            }
+        }
+    };
+
+    /**
+     * Struct used to maintain a stream `param_changed` SPA_PARAM_Props callback that will lock its volume params to
+     * 100%. The struct does not maintain the stream's lifetime or pointer.
+     *
+     * @param stream        reference to the pw_stream to lock its params
+     * @param param         the param value (constructed to contain master volume and channel volume to 100%) that
+     * `elec_node` will be locked to
+     * @param self_listener listener to maintain the `param_changed` callback
+     */
     struct lock_stream_param_data {
         pw_stream &stream;
         spa_pod *param;
@@ -286,64 +379,16 @@ class AudioStores {
         }
     };
 
-    struct lock_node_param_data {
-        pw_node *node;
-        spa_pod *param;
-        spa_hook *self_listener;
-        bool ignore_next_param_event;
-
-        lock_node_param_data(pw_node *node, const spa_audio_info_raw &audio_info) {
-            this->node = node;
-            this->self_listener = new spa_hook();
-            this->ignore_next_param_event = false;
-
-            uint8_t buffer[1024];
-            spa_pod_builder b;
-            spa_pod_builder_init(&b, buffer, sizeof(buffer));
-
-            float volumes[audio_info.channels];
-            for (int i = 0; i < audio_info.channels; i++)
-                volumes[i] = 1.0f;
-
-            spa_pod *temp = (spa_pod *)spa_pod_builder_add_object(
-                &b, SPA_TYPE_OBJECT_Props, SPA_PARAM_Props, SPA_PROP_volume, SPA_POD_Float(1.0f),
-                SPA_PROP_channelVolumes, SPA_POD_Array(sizeof(float), SPA_TYPE_Float, audio_info.channels, volumes),
-                SPA_PROP_channelMap,
-                SPA_POD_Array(sizeof(uint32_t), SPA_TYPE_Id, audio_info.channels, audio_info.position), SPA_PROP_mute,
-                SPA_POD_Bool(false));
-
-            this->param = spa_pod_copy(temp);
-        }
-
-        ~lock_node_param_data() {
-            if (this->node) {
-                pw_proxy_destroy((pw_proxy *)this->node);
-                this->node = nullptr;
-            }
-
-            if (this->self_listener) {
-                spa_hook_remove(this->self_listener);
-                delete this->self_listener;
-                this->self_listener = nullptr;
-            }
-
-            if (this->param) {
-                free(this->param);
-                this->param = nullptr;
-            }
-        }
-    };
-
   private:
     static unordered_map<uint32_t, NodesManager::node_info *> omic_infos;
 
     static unordered_map<uint32_t, NodesManager::node_info *> elec_node_infos;
+    static unordered_map<uint32_t, lock_elec_node_param_data *> lock_elec_node_param_datas;
+
     static unordered_map<uint32_t, AudioStores::vnode_data *> elec_node_to_vnode_data;
     static unordered_map<uint32_t, AudioStores::vnode_data *> elec_node_to_capture_node_data;
-
     static unordered_map<uint32_t, AudioStores::transfer_audio_data *> elec_node_to_transfer_audio_data;
-    static unordered_map<uint32_t, lock_node_param_data *> node_id_to_lock_node_param;
-    static unordered_map<uint32_t, lock_stream_param_data *> elec_node_to_lock_stream_param;
+    static unordered_map<uint32_t, lock_stream_param_data *> elec_node_to_lock_stream_param_data;
 
     /**
      * Removes and deletes the entry for `node_id` from the given map, if present.
@@ -365,6 +410,15 @@ class AudioStores {
      */
     static bool get_elec_node_binary_name(uint32_t node_id, string &name);
 
+    /**
+     * A generic function used by other `get_modifiable_*` functions. Lazily creates an entry for the key with the
+     * factory if its not available, and returns a reference to the key's entry of the map.
+     *
+     * @param key           ID/number key for the map
+     * @param map           a map between ID/key to a generic pointer type
+     * @param factory       function used to construct the generic pointer for creating a new entry
+     * @param log_new_entry string to print out to `cout` when a new entry is created
+     */
     template <typename T>
     static T *get_modifiable_entry(uint32_t key, unordered_map<uint32_t, T *> &map, function<T *()> factory,
                                    string log_new_entry = "");
@@ -403,9 +457,26 @@ class AudioStores {
          */
         static NodesManager::node_info &get_modifiable_elec_node_info(uint32_t elec_node_id);
 
-        static lock_node_param_data &start_new_lock_node_param_data(uint32_t node_id, pw_node *node,
-                                                                    const spa_audio_info_raw &audio_info);
-
+        /**
+         * Function to create a `lock_elec_node_param_data` entry in the `lock_elec_node_param_datas` map for
+         * `elec_node_id` key.
+         *
+         * @param elec_node_id  the ID of the electron node, which is used for the key of the map's entry
+         * @param elec_node     the pw_node pointer of the electron node from the registry bind
+         * @param audio_info    raw audio info used to construct the appropriate param for the sync (uses its channels
+         * and positions)
+         */
+        static lock_elec_node_param_data &start_new_lock_elec_node_param_data(uint32_t elec_node_id, pw_node *elec_node,
+                                                                              const spa_audio_info_raw &audio_info);
+        /**
+         * Function to create a `lock_stream_param_data` entry in the `elec_node_to_lock_stream_param_data` map for
+         * `elec_node_id` key.
+         *
+         * @param elec_node_id  the ID of the electron node, which is used for the key of the map's entry
+         * @param elec_node     the pw_stream reference of the stream
+         * @param audio_info    raw audio info used to construct the appropriate param for the sync (uses its channels
+         * and positions)
+         */
         static lock_stream_param_data &start_new_lock_stream_param_data(uint32_t elec_node_id, pw_stream &stream,
                                                                         const spa_audio_info_raw &audio_info);
 
@@ -486,10 +557,25 @@ class AudioManager {
                                                                            enum pw_stream_state state,
                                                                            const char *error);
 
-    static void on_param_props_lock_onode_params(void *data, int seq, uint32_t id, uint32_t index, uint32_t next,
-                                                 const struct spa_pod *param);
+    /**
+     * Callback function for electron node's `param` callback. Used to reset the node's volume prop whenever it is
+     * changed.
+     *
+     * @param data  casted pointer to `lock_elec_node_param_data` for that electron node
+     * @param id    used to check if the callback is a SPA_PARAM_Props, skip the call if it isnt.
+     */
+    static void on_param_props_lock_onode_params_callback(void *data, int seq, uint32_t id, uint32_t index,
+                                                          uint32_t next, const struct spa_pod *param);
 
-    static void on_param_changed_props_lock_stream_params(void *data, uint32_t id, const struct spa_pod *param);
+    /**
+     * Callback function for a stream's `param_changed` callback. Used to reset the stream's volume prop whenever it is
+     * changed.
+     *
+     * @param data  casted pointer to `lock_stream_param_data` for that stream
+     * @param id    used to check if the callback is a SPA_PARAM_Props, skip the call if it isnt.
+     */
+    static void on_param_changed_props_lock_stream_params_callback(void *data, uint32_t id,
+                                                                   const struct spa_pod *param);
 
   public:
     /**
