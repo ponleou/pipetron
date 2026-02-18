@@ -9,10 +9,8 @@
 #include "spa/param/props.h"
 #include "spa/utils/hook.h"
 #include <array>
-#include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <iostream>
 #include <mutex>
 #include <queue>
 #include <spa/param/audio/format-utils.h>
@@ -27,6 +25,7 @@ using std::move;
 using std::mutex;
 using std::queue;
 using std::string;
+using std::to_string;
 using std::unique_lock;
 using std::unordered_map;
 using std::vector;
@@ -270,6 +269,11 @@ class AudioStores {
                 // left in the queue)
                 if (this->queue_size_stable_count >= this->stable_time) {
                     this->one_time_sync = true;
+
+                    log("One-time queue sync initiated between node ID " +
+                        to_string(pw_stream_get_node_id(&this->capture_node)) + " and " +
+                        to_string(pw_stream_get_node_id(&this->vnode)));
+
                     while (this->audio_queue.size() > buffer->buffer->n_datas) {
                         this->audio_queue.pop();
                     }
@@ -335,11 +339,6 @@ class AudioStores {
         }
 
         ~lock_elec_node_param_data() {
-            if (this->elec_node) {
-                pw_proxy_destroy((pw_proxy *)this->elec_node);
-                this->elec_node = nullptr;
-            }
-
             if (this->self_listener) {
                 spa_hook_remove(this->self_listener);
                 delete this->self_listener;
@@ -349,6 +348,11 @@ class AudioStores {
             if (this->param) {
                 free(this->param);
                 this->param = nullptr;
+            }
+
+            if (this->elec_node) {
+                pw_proxy_destroy((pw_proxy *)this->elec_node);
+                this->elec_node = nullptr;
             }
         }
     };

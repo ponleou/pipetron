@@ -1,6 +1,7 @@
 #include "includes/audio_daemon.hpp"
 #include "includes/audio_manager.hpp"
 #include "includes/utils.hpp"
+#include "includes/volume_manager.hpp"
 #include "pipewire/core.h"
 #include "pipewire/keys.h"
 #include "pipewire/link.h"
@@ -50,15 +51,19 @@ void AudioDaemon::reg_event_find_chromium_and_mic_nodes(void *data, uint32_t id,
             // END FIND MIC
 
             // find electron nodes
-            if (strcmp(props->items[i].key, PW_KEY_APP_NAME) == 0 &&
-                (strcmp(props->items[i].value, "Chromium") == 0
-                 // ||strcmp(props->items[i].value, "Chromium input") == 0
-                 )) {
-
-                // process electron node
-                AudioManager::process_playback_elec_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id,
-                                                         type);
-                break;
+            if (strcmp(props->items[i].key, PW_KEY_APP_NAME) == 0) {
+                if (strcmp(props->items[i].value, "Chromium") == 0) {
+                    // process playback electron node
+                    AudioManager::process_playback_elec_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop),
+                                                             id, type);
+                    break;
+                } else if (strcmp(props->items[i].value, "Chromium input") == 0) {
+                    // process capture electron node,
+                    // FIXME: temp, using volume mirror
+                    VolumeManager::process_new_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id,
+                                                    type);
+                    break;
+                }
             }
             // END FIND ELECTRON NODES
         }
@@ -66,7 +71,7 @@ void AudioDaemon::reg_event_find_chromium_and_mic_nodes(void *data, uint32_t id,
         // process microphone
         if (is_source_or_sink) {
             if (source_or_sink_name.find(PROJECT_NAME) == string::npos) {
-                AudioManager::process_mic_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id, type);
+                // AudioManager::process_mic_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id, type);
             }
         }
     }
@@ -74,6 +79,9 @@ void AudioDaemon::reg_event_find_chromium_and_mic_nodes(void *data, uint32_t id,
 
 void AudioDaemon::on_global_remove(void *data, uint32_t id) {
     AudioManager::enlist_registry_remove_event(id);
+
+    // FIXME: temp for electron inputs
+    VolumeManager::on_global_remove(data, id);
 }
 
 void AudioDaemon::start() {
@@ -114,4 +122,7 @@ void AudioDaemon::start() {
     listener = nullptr;
 
     AudioManager::cleanup();
+
+    // FIXME: temp for electron inputs
+    VolumeManager::cleanup();
 }

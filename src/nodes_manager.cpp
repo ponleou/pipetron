@@ -30,6 +30,7 @@ using std::make_shared;
 using std::pair;
 using std::set;
 using std::string;
+using std::to_string;
 
 // ===== PORT LINKS MANAGER =====
 
@@ -92,6 +93,8 @@ PortLinksManager::link_infos &PortLinksManager::get_modifiable_link_infos_entry(
 }
 
 void PortLinksManager::disconnect_links_from_node_with_link_info(const uint32_t node_id, pw_registry *reg) {
+    log("Removing all links connected to node ID " + to_string(node_id));
+
     const link_infos &links = get_modifiable_link_infos_entry(node_id);
 
     for (auto &link : links.links_list) {
@@ -109,7 +112,7 @@ void PortLinksManager::disconnect_links_from_node_with_link_info(const uint32_t 
 
 void PortLinksManager::store_created_link_proxy_between_nodes(pw_proxy *link, const uint32_t node_id_one,
                                                               const uint32_t node_id_two) {
-    // TODO: log
+    log("Created link between node ID " + to_string(node_id_one) + " and " + to_string(node_id_two));
 
     shared_ptr<pw_proxy *> shared_link = make_shared<pw_proxy *>(link);
 
@@ -123,6 +126,9 @@ void PortLinksManager::store_created_link_proxy_between_nodes(pw_proxy *link, co
 void PortLinksManager::NodeManagerAccessor::enqueue_link_connection_task(const uint32_t playback_node_id,
                                                                          const uint32_t capture_node_id, pw_core &core,
                                                                          const uint32_t channels) {
+    log("Enqueued link creation between node ID " + to_string(playback_node_id) + " (playback) and " +
+        to_string(capture_node_id) + " (capture)");
+
     link_connect_tasks_list.push_back(new link_connect_task_data(playback_node_id, capture_node_id, core, channels));
 }
 
@@ -197,6 +203,9 @@ void PortLinksManager::work_link_connect_task(pw_registry *reg) {
                 if (link != nullptr) {
                     store_created_link_proxy_between_nodes((pw_proxy *)link, playback_node_id, capture_node_id);
                 }
+
+                pw_properties_free(props);
+                props = nullptr;
             }
 
             delete task;
@@ -273,9 +282,9 @@ void PortLinksManager::enlist_registry_port_event(const uint32_t id, const struc
 }
 
 void PortLinksManager::enlist_registry_remove_event(const uint32_t id) {
-    remove_created_link_proxies_with_node_id(id);
     cleanup_port_infos_with_node_id(id);
     cleanup_link_infos_with_node_id(id);
+    remove_created_link_proxies_with_node_id(id);
 }
 
 void PortLinksManager::cleanup() {
@@ -292,11 +301,11 @@ void PortLinksManager::cleanup() {
     for (const auto &[key, value] : node_id_to_link_infos)
         cleanup_link_infos_with_node_id(key);
 
-    for (const auto &[key, value] : node_id_to_created_link_proxies)
-        remove_created_link_proxies_with_node_id(key);
-
     for (const auto &[key, value] : node_id_to_port_infos)
         cleanup_port_infos_with_node_id(key);
+
+    for (const auto &[key, value] : node_id_to_created_link_proxies)
+        remove_created_link_proxies_with_node_id(key);
 }
 
 // ===== END OF PORT LINKS MANAGER =====
@@ -384,10 +393,16 @@ void NodesManager::on_state_change_enqueue_connect_capture_to_onode_single_callb
                                                                                     enum pw_stream_state state,
                                                                                     const char *error) {
 
+    auto *args = (state_change_enqueue_connect_capture_to_onode_args *)data;
+
+    if (state == PW_STREAM_STATE_UNCONNECTED || state == PW_STREAM_STATE_ERROR) {
+        delete args;
+        args = nullptr;
+        return;
+    }
+
     if (state != PW_STREAM_STATE_PAUSED)
         return;
-
-    auto *args = (state_change_enqueue_connect_capture_to_onode_args *)data;
 
     const uint32_t playback_node = args->onode_id;
     const uint32_t capture_node = pw_stream_get_node_id(&args->stream);

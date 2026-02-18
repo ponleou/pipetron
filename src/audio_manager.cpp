@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <iostream>
 #include <stdlib.h>
+#include <string>
 #include <sys/types.h>
 
 using std::cout;
@@ -67,16 +68,25 @@ T *AudioStores::get_modifiable_entry(uint32_t key, unordered_map<uint32_t, T *> 
 
 AudioStores::vnode_data &AudioStores::FriendAccessor::get_modifiable_vnode_data(uint32_t elec_node_id) {
 
-    return *get_modifiable_entry(
-        elec_node_id, elec_node_to_vnode_data,
-        function<vnode_data *()>([]() { return new vnode_data(0, nullptr, nullptr, nullptr); }), "");
+    string elec_node_binary_name = "";
+    bool got_name = get_elec_node_binary_name(elec_node_id, elec_node_binary_name);
+
+    return *get_modifiable_entry(elec_node_id, elec_node_to_vnode_data, function<vnode_data *()>([]() {
+                                     return new vnode_data(0, nullptr, nullptr, nullptr);
+                                 }),
+                                 "Created new virtual node for node ID " + to_string(elec_node_id) +
+                                     (got_name ? " (" + elec_node_binary_name + ")" : ""));
 }
 
 AudioStores::vnode_data &AudioStores::FriendAccessor::get_modifiable_capture_node_data(uint32_t elec_node_id) {
+    string elec_node_binary_name = "";
+    bool got_name = get_elec_node_binary_name(elec_node_id, elec_node_binary_name);
 
-    return *get_modifiable_entry(
-        elec_node_id, elec_node_to_capture_node_data,
-        function<vnode_data *()>([]() { return new vnode_data(0, nullptr, nullptr, nullptr); }), "");
+    return *get_modifiable_entry(elec_node_id, elec_node_to_capture_node_data, function<vnode_data *()>([]() {
+                                     return new vnode_data(0, nullptr, nullptr, nullptr);
+                                 }),
+                                 "Created new capture node to capture audio data from node ID " +
+                                     to_string(elec_node_id) + (got_name ? " (" + elec_node_binary_name + ")" : ""));
 }
 
 NodesManager::node_info &AudioStores::FriendAccessor::get_modifiable_elec_node_info(uint32_t elec_node_id) {
@@ -84,7 +94,7 @@ NodesManager::node_info &AudioStores::FriendAccessor::get_modifiable_elec_node_i
     return *get_modifiable_entry(elec_node_id, elec_node_infos, function<NodesManager::node_info *()>([elec_node_id]() {
                                      return new NodesManager::node_info(elec_node_id);
                                  }),
-                                 "New pipewire node ID " + to_string(elec_node_id) + " detected");
+                                 "New electron node ID " + to_string(elec_node_id) + " detected");
 }
 
 AudioStores::lock_elec_node_param_data &
@@ -121,7 +131,6 @@ AudioStores::FriendAccessor::start_new_transfer_playback_audio_data(uint32_t ele
     }
 
     elec_node_to_transfer_playback_audio_data[elec_node_id] = new transfer_playback_audio_data(capture, vnode);
-    // TODO: log, follow set_vnode
 
     return *elec_node_to_transfer_playback_audio_data[elec_node_id];
 }
@@ -143,10 +152,10 @@ void AudioStores::FriendAccessor::cleanup_stores_with_elec_node_id(uint32_t elec
 
     remove_entry_with_node_id(elec_node_id, elec_node_infos);
     remove_entry_with_node_id(elec_node_id, elec_node_to_transfer_playback_audio_data);
-    remove_entry_with_node_id(elec_node_id, elec_node_to_vnode_data);
-    remove_entry_with_node_id(elec_node_id, elec_node_to_capture_node_data);
     remove_entry_with_node_id(elec_node_id, lock_elec_node_param_datas);
     remove_entry_with_node_id(elec_node_id, elec_node_to_lock_stream_param_data);
+    remove_entry_with_node_id(elec_node_id, elec_node_to_vnode_data);
+    remove_entry_with_node_id(elec_node_id, elec_node_to_capture_node_data);
 }
 
 void AudioStores::FriendAccessor::cleanup() {
@@ -159,17 +168,17 @@ void AudioStores::FriendAccessor::cleanup() {
     for (const auto &[key, value] : elec_node_to_transfer_playback_audio_data)
         remove_entry_with_node_id(key, elec_node_to_transfer_playback_audio_data);
 
-    for (const auto &[key, value] : elec_node_to_vnode_data)
-        remove_entry_with_node_id(key, elec_node_to_vnode_data);
-
-    for (const auto &[key, value] : elec_node_to_capture_node_data)
-        remove_entry_with_node_id(key, elec_node_to_capture_node_data);
-
     for (const auto &[key, value] : lock_elec_node_param_datas)
         remove_entry_with_node_id(key, lock_elec_node_param_datas);
 
     for (const auto &[key, value] : elec_node_to_lock_stream_param_data)
         remove_entry_with_node_id(key, elec_node_to_lock_stream_param_data);
+
+    for (const auto &[key, value] : elec_node_to_vnode_data)
+        remove_entry_with_node_id(key, elec_node_to_vnode_data);
+
+    for (const auto &[key, value] : elec_node_to_capture_node_data)
+        remove_entry_with_node_id(key, elec_node_to_capture_node_data);
 }
 
 // ========= END OF AUDIO STORES =========
@@ -231,10 +240,17 @@ void AudioManager::on_process_vnode_play_data_callback(void *data) {
 void AudioManager::on_state_changed_vnode_copy_link_direction_single_callback(void *data, enum pw_stream_state old,
                                                                               enum pw_stream_state state,
                                                                               const char *error) {
-    if (state != PW_STREAM_STATE_PAUSED)
-        return;
 
     auto *args = (AudioManagerArgs::on_state_changed_vnode_copy_link_direction_args *)data;
+
+    if (state == PW_STREAM_STATE_UNCONNECTED || state == PW_STREAM_STATE_ERROR) {
+        delete args;
+        args = nullptr;
+        return;
+    }
+
+    if (state != PW_STREAM_STATE_PAUSED)
+        return;
 
     NodesManager::copy_playback_link_direction(args->vnode_stream, pw_stream_get_node_id(&args->vnode_stream),
                                                args->vnode_core, args->vnode_channels, args->onode_id, &args->reg);
