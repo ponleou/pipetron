@@ -23,7 +23,8 @@ unordered_map<uint32_t, NodesManager::node_info *> AudioStores::omic_infos = {};
 unordered_map<uint32_t, NodesManager::node_info *> AudioStores::elec_node_infos = {};
 unordered_map<uint32_t, AudioStores::vnode_data *> AudioStores::elec_node_to_vnode_data = {};
 unordered_map<uint32_t, AudioStores::vnode_data *> AudioStores::elec_node_to_capture_node_data = {};
-unordered_map<uint32_t, AudioStores::transfer_audio_data *> AudioStores::elec_node_to_transfer_audio_data = {};
+unordered_map<uint32_t, AudioStores::transfer_playback_audio_data *>
+    AudioStores::elec_node_to_transfer_playback_audio_data = {};
 unordered_map<uint32_t, AudioStores::lock_elec_node_param_data *> AudioStores::lock_elec_node_param_datas = {};
 unordered_map<uint32_t, AudioStores::lock_stream_param_data *> AudioStores::elec_node_to_lock_stream_param_data = {};
 
@@ -110,18 +111,19 @@ AudioStores::FriendAccessor::start_new_lock_stream_param_data(uint32_t elec_node
     return *elec_node_to_lock_stream_param_data[elec_node_id];
 }
 
-AudioStores::transfer_audio_data &AudioStores::FriendAccessor::start_new_transfer_audio_data(uint32_t elec_node_id,
-                                                                                             pw_stream &capture,
-                                                                                             pw_stream &vnode) {
+AudioStores::transfer_playback_audio_data &
+AudioStores::FriendAccessor::start_new_transfer_playback_audio_data(uint32_t elec_node_id, pw_stream &capture,
+                                                                    pw_stream &vnode) {
 
-    if (elec_node_to_transfer_audio_data.find(elec_node_id) != elec_node_to_transfer_audio_data.end()) {
-        remove_entry_with_node_id(elec_node_id, elec_node_to_transfer_audio_data);
+    if (elec_node_to_transfer_playback_audio_data.find(elec_node_id) !=
+        elec_node_to_transfer_playback_audio_data.end()) {
+        remove_entry_with_node_id(elec_node_id, elec_node_to_transfer_playback_audio_data);
     }
 
-    elec_node_to_transfer_audio_data[elec_node_id] = new transfer_audio_data(capture, vnode);
+    elec_node_to_transfer_playback_audio_data[elec_node_id] = new transfer_playback_audio_data(capture, vnode);
     // TODO: log, follow set_vnode
 
-    return *elec_node_to_transfer_audio_data[elec_node_id];
+    return *elec_node_to_transfer_playback_audio_data[elec_node_id];
 }
 
 NodesManager::node_info &AudioStores::FriendAccessor::get_modifiable_omic_info(uint32_t elec_node_id) {
@@ -140,7 +142,7 @@ void AudioStores::FriendAccessor::cleanup_stores_with_elec_node_id(uint32_t elec
     }
 
     remove_entry_with_node_id(elec_node_id, elec_node_infos);
-    remove_entry_with_node_id(elec_node_id, elec_node_to_transfer_audio_data);
+    remove_entry_with_node_id(elec_node_id, elec_node_to_transfer_playback_audio_data);
     remove_entry_with_node_id(elec_node_id, elec_node_to_vnode_data);
     remove_entry_with_node_id(elec_node_id, elec_node_to_capture_node_data);
     remove_entry_with_node_id(elec_node_id, lock_elec_node_param_datas);
@@ -154,8 +156,8 @@ void AudioStores::FriendAccessor::cleanup() {
     for (const auto &[key, value] : elec_node_infos)
         remove_entry_with_node_id(key, elec_node_infos);
 
-    for (const auto &[key, value] : elec_node_to_transfer_audio_data)
-        remove_entry_with_node_id(key, elec_node_to_transfer_audio_data);
+    for (const auto &[key, value] : elec_node_to_transfer_playback_audio_data)
+        remove_entry_with_node_id(key, elec_node_to_transfer_playback_audio_data);
 
     for (const auto &[key, value] : elec_node_to_vnode_data)
         remove_entry_with_node_id(key, elec_node_to_vnode_data);
@@ -177,7 +179,8 @@ void AudioStores::FriendAccessor::cleanup() {
 // TODO: mic
 void *AudioManager::post_mic_process_hook(NodesManager::create_node_args *vnode_args, void *data) {
 
-    auto *onode_id = (uint32_t *)data;
+    // we are making a replicated virtual mic of the original mic node
+    auto *args = (AudioManagerArgs::post_mic_process_hook_args *)data;
 
     NodesManager::create_node_output output;
     vnode_args->override_desc.node_description = vnode_args->onode.node_description + " (" + string(PROJECT_NAME) + ")";
@@ -187,7 +190,7 @@ void *AudioManager::post_mic_process_hook(NodesManager::create_node_args *vnode_
     delete vnode_args;
     vnode_args = nullptr;
 
-    AudioStores::vnode_data &vnode_data = AudioStores::FriendAccessor::get_modifiable_vnode_data(*onode_id);
+    AudioStores::vnode_data &vnode_data = AudioStores::FriendAccessor::get_modifiable_vnode_data(args->omic_id);
     vnode_data.context = output.context;
     vnode_data.core = output.core;
     vnode_data.stream = output.stream;
@@ -197,14 +200,14 @@ void *AudioManager::post_mic_process_hook(NodesManager::create_node_args *vnode_
     output.stream = nullptr;
     vnode_data.id = 0; // default value, will be set by AudioManager::on_state_change_single_callback
 
-    delete onode_id;
-    onode_id = nullptr;
+    delete args;
+    args = nullptr;
 
     return nullptr;
 }
 
 void AudioManager::on_process_capture_store_data_callback(void *data) {
-    auto *args = (AudioStores::transfer_audio_data *)data;
+    auto *args = (AudioStores::transfer_playback_audio_data *)data;
 
     pw_buffer *capture_buf = pw_stream_dequeue_buffer(&args->capture_node);
 
@@ -215,7 +218,7 @@ void AudioManager::on_process_capture_store_data_callback(void *data) {
 }
 
 void AudioManager::on_process_vnode_play_data_callback(void *data) {
-    auto *args = (AudioStores::transfer_audio_data *)data;
+    auto *args = (AudioStores::transfer_playback_audio_data *)data;
 
     pw_buffer *vnode_buf = pw_stream_dequeue_buffer(&args->vnode);
 
@@ -366,7 +369,7 @@ void *AudioManager::post_elec_node_process_hook(NodesManager::create_node_args *
         .process = on_process_capture_store_data_callback,
     };
 
-    auto &transfer_audio_data = AudioStores::FriendAccessor::start_new_transfer_audio_data(
+    auto &transfer_audio_data = AudioStores::FriendAccessor::start_new_transfer_playback_audio_data(
         args->onode_id, *capture_node_data.stream, *vnode_data.stream);
 
     pw_stream_add_listener(capture_node_data.stream, transfer_audio_data.listeners[0], &capture_events,
@@ -389,13 +392,12 @@ void *AudioManager::post_elec_node_process_hook(NodesManager::create_node_args *
 void AudioManager::process_mic_node(pw_registry *reg, pw_loop *loop, uint32_t id, const char *type) {
 
     pw_node *mic_node = (pw_node *)pw_registry_bind(reg, id, type, PW_VERSION_NODE, 0);
-    // FIXME: delete this bind after
 
-    uint32_t *onode_id = new uint32_t(id);
+    auto *hook_args = new AudioManagerArgs::post_mic_process_hook_args(id, mic_node);
 
     NodesManager::process_new_node(mic_node, new NodesManager::nodes_manager_args_data(
                                                  *loop, AudioStores::FriendAccessor::get_modifiable_omic_info(id),
-                                                 AudioManager::post_mic_process_hook, onode_id));
+                                                 AudioManager::post_mic_process_hook, hook_args));
 }
 
 void AudioManager::process_playback_elec_node(pw_registry *reg, pw_loop *loop, uint32_t id, const char *type) {

@@ -35,6 +35,23 @@ class AudioManagerArgs {
   private:
     friend class AudioManager;
 
+    // TODO: docs
+    struct post_mic_process_hook_args {
+        pw_node *omic;
+        const uint32_t omic_id;
+
+        post_mic_process_hook_args(const uint32_t omic_id, pw_node *omic) : omic_id(omic_id) {
+            this->omic = omic;
+        }
+
+        ~post_mic_process_hook_args() {
+            if (this->omic) {
+                pw_proxy_destroy((pw_proxy *)this->omic);
+                this->omic = nullptr;
+            }
+        }
+    };
+
     /**
      * Args struct passed to `post_elec_node_process_hook` function.
      *
@@ -146,6 +163,12 @@ class AudioStores {
         }
     };
 
+    // TODO: mic
+    // struct transfer_capture_audio_data {
+    //     pw_stream &vmic;
+    //     pw_stream &vnode;
+    // }
+
     /**
      * Data struct stored in a map to the original node ID that holds `process` listeners for the capture node and the
      * virtual node, which are responsible for copying audio data from the capture node into the virtual node for
@@ -170,7 +193,7 @@ class AudioStores {
      * @param store_buffer_to_queue   called by `capture_node` 's process callback to store buffer data into the queue
      * @param load_buffer_from_queue  called by `vnode` 's process callback to copy data from queue into its buffer
      */
-    struct transfer_audio_data {
+    struct transfer_playback_audio_data {
         pw_stream &capture_node;
         pw_stream &vnode;
         queue<vector<uint8_t>> audio_queue;
@@ -182,7 +205,7 @@ class AudioStores {
         int queue_size_stable_count;
         const int stable_time;
 
-        transfer_audio_data(pw_stream &capture_node, pw_stream &vnode)
+        transfer_playback_audio_data(pw_stream &capture_node, pw_stream &vnode)
             : capture_node(capture_node), vnode(vnode), stable_time(200) {
             this->audio_queue = {};
             this->listeners[0] = new spa_hook();
@@ -192,7 +215,7 @@ class AudioStores {
             this->queue_size_stable_count = 0;
         }
 
-        ~transfer_audio_data() {
+        ~transfer_playback_audio_data() {
             for (spa_hook *listener : this->listeners) {
                 if (listener) {
                     spa_hook_remove(listener);
@@ -298,7 +321,7 @@ class AudioStores {
             spa_pod_builder_init(&b, buffer, sizeof(buffer));
 
             float volumes[audio_info.channels];
-            for (int i = 0; i < audio_info.channels; i++)
+            for (uint32_t i = 0; i < audio_info.channels; i++)
                 volumes[i] = 1.0f;
 
             spa_pod *temp = (spa_pod *)spa_pod_builder_add_object(
@@ -352,7 +375,7 @@ class AudioStores {
             spa_pod_builder_init(&b, buffer, sizeof(buffer));
 
             float volumes[audio_info.channels];
-            for (int i = 0; i < audio_info.channels; i++)
+            for (uint32_t i = 0; i < audio_info.channels; i++)
                 volumes[i] = 1.0f;
 
             spa_pod *temp = (spa_pod *)spa_pod_builder_add_object(
@@ -387,7 +410,8 @@ class AudioStores {
 
     static unordered_map<uint32_t, AudioStores::vnode_data *> elec_node_to_vnode_data;
     static unordered_map<uint32_t, AudioStores::vnode_data *> elec_node_to_capture_node_data;
-    static unordered_map<uint32_t, AudioStores::transfer_audio_data *> elec_node_to_transfer_audio_data;
+    static unordered_map<uint32_t, AudioStores::transfer_playback_audio_data *>
+        elec_node_to_transfer_playback_audio_data;
     static unordered_map<uint32_t, lock_stream_param_data *> elec_node_to_lock_stream_param_data;
 
     /**
@@ -481,13 +505,14 @@ class AudioStores {
                                                                         const spa_audio_info_raw &audio_info);
 
         /**
-         * Deletes existing `transfer_audio_data` instance in `elec_node_id` entry from
-         * `elec_node_to_transfer_audio_data` map (if any), and creates a new `transfer_audio_data` instance.
+         * Deletes existing `transfer_playback_audio_data` instance in `elec_node_id` entry from
+         * `elec_node_to_transfer_playback_audio_data` map (if any), and creates a new `transfer_playback_audio_data`
+         * instance.
          *
-         * @return reference to the new `transfer_audio_data` instance
+         * @return reference to the new `transfer_playback_audio_data` instance
          */
-        static transfer_audio_data &start_new_transfer_audio_data(uint32_t elec_node_id, pw_stream &capture,
-                                                                  pw_stream &vnode);
+        static transfer_playback_audio_data &
+        start_new_transfer_playback_audio_data(uint32_t elec_node_id, pw_stream &capture, pw_stream &vnode);
 
         /**
          * TODO: mic
@@ -578,21 +603,24 @@ class AudioManager {
                                                                    const struct spa_pod *param);
 
   public:
+    // TODO: mic
+    static void on_process_vmic_callback(void *data);
+
     /**
      * Callback used by the capture node connected to the original electron node. Called on `process` event, which will
-     * copy the capture node's audio buffer into the `transfer_audio_data` instance queue.
+     * copy the capture node's audio buffer into the `transfer_playback_audio_data` instance queue.
      *
-     * @param data data casted to `transfer_audio_data` which contains the info required to transfer between the two
-     * pairs in isolation
+     * @param data data casted to `transfer_playback_audio_data` which contains the info required to transfer between
+     * the two pairs in isolation
      */
     static void on_process_capture_store_data_callback(void *data);
 
     /**
      * Callback used by the replicated virtual node for playback. Called on `process` event, which will copy audio data
-     * from the `transfer_audio_data` queue into its buffer for playback.
+     * from the `transfer_playback_audio_data` queue into its buffer for playback.
      *
-     * @param data data casted to `transfer_audio_data` which contains the info required to transfer between the two
-     * pairs in isolation
+     * @param data data casted to `transfer_playback_audio_data` which contains the info required to transfer between
+     * the two pairs in isolation
      */
     static void on_process_vnode_play_data_callback(void *data);
 

@@ -66,7 +66,7 @@ void AudioDaemon::reg_event_find_chromium_and_mic_nodes(void *data, uint32_t id,
         // process microphone
         if (is_source_or_sink) {
             if (source_or_sink_name.find(PROJECT_NAME) == string::npos) {
-                // AudioManager::process_mic_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id, type);
+                AudioManager::process_mic_node(reg_data->reg, pw_main_loop_get_loop(reg_data->main_loop), id, type);
             }
         }
     }
