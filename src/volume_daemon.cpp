@@ -45,29 +45,29 @@ void VolumeDaemon::start() {
     pw_init(nullptr, nullptr);
 
     // getting context to connect to pipewire daemon
-    struct pw_main_loop *loop = pw_main_loop_new(nullptr);
-    struct pw_context *context = pw_context_new(pw_main_loop_get_loop(loop), nullptr, 0);
+    pw_main_loop *loop = pw_main_loop_new(nullptr);
+    pw_context *context = pw_context_new(pw_main_loop_get_loop(loop), nullptr, 0);
 
     // connect context to daemon
-    struct pw_core *core = pw_context_connect(context, nullptr, 0);
+    pw_core *core = pw_context_connect(context, nullptr, 0);
     Utils::raise_error(core == nullptr, string("failed to connect to pipewire daemon, ") + strerror(errno), errno);
 
-    struct pw_registry *registry = pw_core_get_registry(core, PW_VERSION_REGISTRY, 0);
+    pw_registry *registry = pw_core_get_registry(core, PW_VERSION_REGISTRY, 0);
 
-    struct spa_hook *listener = new spa_hook();
+    spa_hook *listener = new spa_hook();
 
-    static const struct pw_registry_events registry_events = {
+    static const pw_registry_events registry_events = {
         .version = PW_VERSION_REGISTRY_EVENTS,
         .global = reg_event_find_chromium_nodes,
         .global_remove = VolumeManager::on_global_remove,
     };
 
-    struct VolumeDaemon::registry_event_global_data reg_data = {loop, registry};
+    VolumeDaemon::registry_event_global_data reg_data = {loop, registry};
     pw_registry_add_listener(registry, listener, &registry_events, &reg_data);
 
     pw_main_loop_run(loop);
 
-    pw_proxy_destroy((struct pw_proxy *)registry);
+    pw_proxy_destroy((pw_proxy *)registry);
     pw_core_disconnect(core);
     pw_context_destroy(context);
     pw_main_loop_destroy(loop);

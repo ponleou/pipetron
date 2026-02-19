@@ -1,10 +1,11 @@
-project('pipetron', 'cpp', version: '1.1.0', license: 'MIT')
+project('pipetron', 'cpp', version: '1.2.0', license: 'MIT')
 
 project_name = meson.project_name()
 project_version = meson.project_version()
 project_license = meson.project_license()[0]
 
 pipewire_dep = dependency('libpipewire-0.3')
+tomlpp_dep = dependency('tomlplusplus')
 
 project_conf_data = configuration_data()
 project_conf_data.set_quoted('PROJECT_NAME', project_name)
@@ -25,9 +26,11 @@ executable(
     'src/utils.cpp',
     'src/volume_manager.cpp',
     'src/volume_daemon.cpp',
+    'src/audio_manager.cpp',
+    'src/audio_daemon.cpp',
     'src/nodes_manager.cpp',
     include_directories: project_include_dir,
-    dependencies: [pipewire_dep],
+    dependencies: [pipewire_dep, tomlpp_dep],
     install: true,
 )
 

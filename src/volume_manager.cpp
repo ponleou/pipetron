@@ -7,6 +7,7 @@
 #include "spa/param/param.h"
 #include "spa/pod/builder.h"
 #include "spa/utils/hook.h"
+#include <build.h>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -22,7 +23,7 @@ using std::string;
 using std::to_string;
 using std::unordered_map;
 
-unordered_map<uint32_t, NodesManager::onode_info *> VolumeStores::onode_infos = {};
+unordered_map<uint32_t, NodesManager::node_info *> VolumeStores::onode_infos = {};
 unordered_map<uint32_t, VolumeStores::vnode_data *> VolumeStores::onode_to_vnode_data = {};
 unordered_map<uint32_t, VolumeStores::sync_params_data *> VolumeStores::onode_to_sync_params_data = {};
 
@@ -52,18 +53,23 @@ bool VolumeStores::get_onode_binary_name(uint32_t onode_id, string &name) {
 }
 
 VolumeStores::vnode_data &VolumeStores::FriendAccessor::get_modifiable_vnode_data(uint32_t onode_id) {
+
     if (onode_to_vnode_data.find(onode_id) == onode_to_vnode_data.end()) {
         onode_to_vnode_data[onode_id] = new vnode_data(0, nullptr, nullptr, nullptr);
-        // TODO: log, follow set_vnode
+
+        string onode_binary_name = "";
+        bool got_name = get_onode_binary_name(onode_id, onode_binary_name);
+        log("Created new virtual node for volume mirror with node ID " + to_string(onode_id) +
+            (got_name ? " (" + onode_binary_name + ")" : ""));
     }
     return *onode_to_vnode_data[onode_id];
 }
 
-NodesManager::onode_info &VolumeStores::FriendAccessor::get_modifiable_onode_info(uint32_t onode_id) {
+NodesManager::node_info &VolumeStores::FriendAccessor::get_modifiable_onode_info(uint32_t onode_id) {
 
     if (onode_infos.find(onode_id) == onode_infos.end()) {
-        onode_infos[onode_id] = new NodesManager::onode_info(onode_id);
-        log("New pipewire node ID " + to_string(onode_id) + " detected");
+        onode_infos[onode_id] = new NodesManager::node_info(onode_id);
+        log("New electron node ID " + to_string(onode_id) + " detected");
     }
 
     return *onode_infos[onode_id];
@@ -84,20 +90,20 @@ void VolumeStores::FriendAccessor::cleanup_entries_with_onode_id(uint32_t onode_
         log("Cleaning up node ID " + to_string(onode_id) + " (" + onode_name + ")");
     }
 
-    remove_entry_with_onode<NodesManager::onode_info>(onode_id, onode_infos);
-    remove_entry_with_onode<vnode_data>(onode_id, onode_to_vnode_data);
+    remove_entry_with_onode<NodesManager::node_info>(onode_id, onode_infos);
     remove_entry_with_onode<sync_params_data>(onode_id, onode_to_sync_params_data);
+    remove_entry_with_onode<vnode_data>(onode_id, onode_to_vnode_data);
 }
 
 void VolumeStores::FriendAccessor::cleanup() {
     for (const auto &[key, value] : onode_infos)
-        remove_entry_with_onode<NodesManager::onode_info>(key, onode_infos);
-
-    for (const auto &[key, value] : onode_to_vnode_data)
-        remove_entry_with_onode<vnode_data>(key, onode_to_vnode_data);
+        remove_entry_with_onode<NodesManager::node_info>(key, onode_infos);
 
     for (const auto &[key, value] : onode_to_sync_params_data)
         remove_entry_with_onode<sync_params_data>(key, onode_to_sync_params_data);
+
+    for (const auto &[key, value] : onode_to_vnode_data)
+        remove_entry_with_onode<vnode_data>(key, onode_to_vnode_data);
 }
 
 void VolumeManager::on_vnode_param_props(void *data, uint32_t id, const struct spa_pod *param) {
@@ -190,6 +196,12 @@ void VolumeManager::on_state_change_single_callback(void *data, enum pw_stream_s
     VolumeManagerArgs::state_change_single_callback_args *args =
         (VolumeManagerArgs::state_change_single_callback_args *)data;
 
+    if (state == PW_STREAM_STATE_UNCONNECTED || state == PW_STREAM_STATE_ERROR) {
+        delete args;
+        args = nullptr;
+        return;
+    }
+
     if (state == PW_STREAM_STATE_PAUSED && !args->stream_processed_flag) {
         auto &vnode_data = VolumeStores::FriendAccessor::get_modifiable_vnode_data(args->onode_id);
         vnode_data.id = pw_stream_get_node_id(vnode_data.stream);
@@ -212,23 +224,26 @@ void VolumeManager::on_state_change_single_callback(void *data, enum pw_stream_s
     }
 }
 
-void *VolumeManager::post_node_process_hook(NodesManager::replicate_vnode_args *vnode_args, void *data) {
+void *VolumeManager::post_node_process_hook(NodesManager::create_node_args *vnode_args, void *data) {
 
     auto *onode_id = (uint32_t *)data;
 
-    NodesManager::replicate_vnode_output output;
-    NodesManager::replicate_virtual_node(*vnode_args, output);
+    NodesManager::create_node_output output;
+    vnode_args->override_desc.app_name = vnode_args->onode.app_process_binary;
+    vnode_args->override_desc.app_icon_name = vnode_args->onode.app_process_binary;
+    vnode_args->override_desc.media_name = string(PROJECT_NAME) + " volume controller";
+    NodesManager::replicate_vnode(*vnode_args, output);
     delete vnode_args;
     vnode_args = nullptr;
 
     VolumeStores::vnode_data &vnode_data = VolumeStores::FriendAccessor::get_modifiable_vnode_data(*onode_id);
-    vnode_data.context = output.vcontext;
-    vnode_data.core = output.vcore;
-    vnode_data.stream = output.vstream;
+    vnode_data.context = output.context;
+    vnode_data.core = output.core;
+    vnode_data.stream = output.stream;
 
-    output.vcontext = nullptr;
-    output.vcore = nullptr;
-    output.vstream = nullptr;
+    output.context = nullptr;
+    output.core = nullptr;
+    output.stream = nullptr;
     vnode_data.id = 0; // default value, will be set by VolumeManager::on_state_change_single_callback
 
     static const pw_stream_events stream_events = {
