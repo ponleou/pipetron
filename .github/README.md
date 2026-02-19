@@ -12,11 +12,11 @@ Pipetron's solution is simple: replicate all Electron audio streams with it's ac
 
 Without Pipetron:
 
-<img src="./img/pavucontrol_without_pipetron.png" alt="pavucontrol without Pipetron" width=70% />
+<img src="../img/pavucontrol_without_pipetron.png" alt="pavucontrol without Pipetron" width=70% />
 
 With Pipetron:
 
-<img src="./img/pavucontrol_with_pipetron.png" alt="pavucontrol with Pipetron" width=70% />
+<img src="../img/pavucontrol_with_pipetron.png" alt="pavucontrol with Pipetron" width=70% />
 
 ## Installing
 
@@ -40,8 +40,8 @@ systemctl --user start pipetron.service
 
 #### Requirements
 
--   `meson`
--   `pipewire` and `libpipewire`
+- `meson`
+- `pipewire` and `libpipewire`
 
 ```
 git clone -b stable --single-branch https://codeberg.org/ponleou/pipetron.git
@@ -56,4 +56,3 @@ Start and enable the systemd service by:
 ```
 systemctl --user enable --now pipetron.service
 ```
-
