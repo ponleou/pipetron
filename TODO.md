@@ -18,5 +18,5 @@ for input onodes:
 
 other:
 
-- [ ] config file to determine daemon mode to start
-- [ ] work on fixmes and todos in code
+- [x] config file to determine daemon mode to start
+- [x] work on fixmes and todos in code

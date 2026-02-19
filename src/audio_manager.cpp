@@ -291,7 +291,7 @@ void AudioManager::on_param_changed_props_lock_stream_params_callback(void *data
     pw_stream_set_param(&lock_param_data->stream, SPA_PARAM_Props, lock_param_data->param);
 }
 
-void *AudioManager::post_elec_node_process_hook(NodesManager::create_node_args *vnode_args, void *data) {
+void *AudioManager::post_playback_elec_node_process_hook(NodesManager::create_node_args *vnode_args, void *data) {
 
     auto *args = (AudioManagerArgs::post_elec_node_process_hook_args *)data;
 
@@ -423,9 +423,10 @@ void AudioManager::process_playback_elec_node(pw_registry *reg, pw_loop *loop, u
 
     auto *hook_args = new AudioManagerArgs::post_elec_node_process_hook_args(id, *reg, elec_node);
 
-    NodesManager::process_new_node(elec_node, new NodesManager::nodes_manager_args_data(
-                                                  *loop, AudioStores::FriendAccessor::get_modifiable_elec_node_info(id),
-                                                  AudioManager::post_elec_node_process_hook, (void *)hook_args));
+    NodesManager::process_new_node(elec_node,
+                                   new NodesManager::nodes_manager_args_data(
+                                       *loop, AudioStores::FriendAccessor::get_modifiable_elec_node_info(id),
+                                       AudioManager::post_playback_elec_node_process_hook, (void *)hook_args));
 }
 
 void AudioManager::enlist_registry_port_event(const uint32_t id, const struct spa_dict *props, pw_registry *reg) {

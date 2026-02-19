@@ -550,16 +550,21 @@ class AudioManager {
      * Hook called after `NodesManager::process_new_node`
      *
      * It creates a virtual node to replicate the playback electron node, and a capture node to capture the electron
-     * node's audio data. // TODO: after capturing audio what to do?
+     * node's audio data. After creating the nodes, it manages link connections for the playback electron node,
+     * replicated node, and capture node. Finally, it starts running listeners to lock the playback electron and capture
+     * node volume settings, and transfer audio data from capture node to the replicated node.
      *
      * From calling `NodesManager::connect_capture_to_onode`, it creates the capture node, disconnects the playback
      * electron node's links, and make links from the playback electron node to the capture node.
+     *
+     * It also ensures the replicated node have the same link direction and connection as the electron node before
+     * isolating the electron node's links to the capture node.
      *
      * @param vnode_args  Passed by `NodesManager::process_new_node` which is specifically used to call
      * other `NodeManager` methods to create nodes with those information
      * @param data        The pointer to the data from `NodesManager::process_new_node` 's post hook arguments
      */
-    static void *post_elec_node_process_hook(NodesManager::create_node_args *vnode_args, void *data);
+    static void *post_playback_elec_node_process_hook(NodesManager::create_node_args *vnode_args, void *data);
 
     /**
      * // TODO: mic
