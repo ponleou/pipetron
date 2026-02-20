@@ -1,5 +1,4 @@
 #include "includes/nodes_manager.hpp"
-
 #include "pipewire/context.h"
 #include "pipewire/core.h"
 #include "pipewire/keys.h"
