@@ -94,7 +94,7 @@ class VolumeStores {
             this->listeners[1] = new spa_hook();
 
             spa_pod_dynamic_builder builder;
-            spa_pod_dynamic_builder_init(&builder, nullptr, 0, 1);
+            spa_pod_dynamic_builder_init(&builder, nullptr, 0, 128);
 
             float volumes[audio_info.channels];
             for (uint32_t i = 0; i < audio_info.channels; i++)

@@ -9,7 +9,7 @@
 #include "pipewire/proxy.h"
 #include "pipewire/stream.h"
 #include "spa/param/param.h"
-#include "spa/pod/builder.h"
+#include "spa/pod/dynamic.h"
 #include "spa/utils/dict.h"
 #include "spa/utils/hook.h"
 #include <build.h>
@@ -189,12 +189,11 @@ void PortLinksManager::work_link_connect_task(pw_registry *reg) {
             disconnect_links_from_node_with_link_info(playback_node_id, reg);
 
             for (auto pair : port_pairs) {
-                char output_port_id[32], input_port_id[32];
-                snprintf(output_port_id, sizeof(output_port_id), "%u", pair.first);
-                snprintf(input_port_id, sizeof(input_port_id), "%u", pair.second);
+                string output_port_id = to_string(pair.first);
+                string input_port_id = to_string(pair.second);
 
-                pw_properties *props = pw_properties_new(PW_KEY_LINK_OUTPUT_PORT, output_port_id,
-                                                         PW_KEY_LINK_INPUT_PORT, input_port_id, nullptr);
+                pw_properties *props = pw_properties_new(PW_KEY_LINK_OUTPUT_PORT, output_port_id.c_str(),
+                                                         PW_KEY_LINK_INPUT_PORT, input_port_id.c_str(), nullptr);
 
                 void *link = pw_core_create_object(&task->core, "link-factory", PW_TYPE_INTERFACE_Link, PW_VERSION_LINK,
                                                    &props->dict, 0);
@@ -472,10 +471,13 @@ void NodesManager::replicate_vnode(const NodesManager::create_node_args &args,
         (args.override_desc.media_name != "" ? args.override_desc.media_name : args.onode.media_name).c_str(),
         stream_props);
 
-    uint8_t buffer[1024];
-    spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
+    spa_pod_dynamic_builder builder;
+    spa_pod_dynamic_builder_init(&builder, nullptr, 0, 256);
+
     const spa_pod *params[1];
-    params[0] = spa_format_audio_raw_build(&builder, SPA_PARAM_EnumFormat, &args.onode.audio_info);
+    params[0] = spa_format_audio_raw_build(&builder.b, SPA_PARAM_EnumFormat, &args.onode.audio_info);
+
+    spa_pod_dynamic_builder_clean(&builder);
 
     output.context = virtual_context;
     output.core = virtual_core;
@@ -498,9 +500,6 @@ void NodesManager::connect_capture_to_onode(const create_node_args &onode_args, 
     pw_context *context = pw_context_new(&onode_args.loop, nullptr, 0);
     pw_core *core = pw_context_connect(context, nullptr, 0);
 
-    char target[32];
-    snprintf(target, sizeof(target), "%u", onode_args.onode.id);
-
     pw_properties *stream_props = pw_properties_new(PW_KEY_MEDIA_TYPE, "Audio",
                                                     //
                                                     nullptr);
@@ -515,10 +514,13 @@ void NodesManager::connect_capture_to_onode(const create_node_args &onode_args, 
             .c_str(),
         stream_props);
 
-    uint8_t buffer[1024];
-    spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
+    spa_pod_dynamic_builder builder;
+    spa_pod_dynamic_builder_init(&builder, nullptr, 0, 256);
+
     const spa_pod *params[1];
-    params[0] = spa_format_audio_raw_build(&builder, SPA_PARAM_EnumFormat, &onode_args.onode.audio_info);
+    params[0] = spa_format_audio_raw_build(&builder.b, SPA_PARAM_EnumFormat, &onode_args.onode.audio_info);
+
+    spa_pod_dynamic_builder_clean(&builder);
 
     output.stream = stream;
     output.context = context;
