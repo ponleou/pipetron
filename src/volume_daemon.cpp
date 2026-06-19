@@ -1,19 +1,19 @@
 #include "includes/volume_daemon.hpp"
 #include "includes/utils.hpp"
 #include "includes/volume_manager.hpp"
-#include "pipewire/context.h"
-#include "pipewire/core.h"
-#include "pipewire/keys.h"
-#include "pipewire/main-loop.h"
-#include "pipewire/pipewire.h"
-#include "pipewire/proxy.h"
-#include "spa/utils/dict.h"
-#include "spa/utils/hook.h"
 #include <build.h>
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <pipewire/context.h>
+#include <pipewire/core.h>
+#include <pipewire/keys.h>
+#include <pipewire/main-loop.h>
+#include <pipewire/pipewire.h>
+#include <pipewire/proxy.h>
 #include <spa/param/audio/format-utils.h>
+#include <spa/utils/dict.h>
+#include <spa/utils/hook.h>
 #include <string>
 using std::string;
 
