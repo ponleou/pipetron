@@ -1,4 +1,4 @@
-project('pipetron', 'cpp', version: '1.2.0', license: 'MIT')
+project('pipetron', 'cpp', version: '1.2.1', license: 'MIT')
 
 project_name = meson.project_name()
 project_version = meson.project_version()
