@@ -30,11 +30,13 @@ Pipetron comes with two different daemons, **volume** and **audio** daemon.
 
 Volume daemon uses a simple approach to solve the issue: replicate all Electron audio streams with its actual Electron app name and icons, and make a one-way sync of its volume settings from the replicated stream to its corresponding Electron stream. This daemon is a light-weight solution aimed to solve the annoyance issue, and WirePlumber's dependency on node's names to save volume settings. This, however, does not solve the general issue.
 
-### Audio daemon (experimental)
+### Audio daemon
 
 Audio daemon works by also replicating all Electron audio streams with its actual app name and icons, but also transfers the audio data from the original Electron streams into the replicated stream. It aims to be integrated seamlessly with daily audio usages, ensuring link isolation of the original Electron stream, and the expected link connection with the replicated streams. As a byproduct, the solution can be more bloated, but should solve the general issue regarding Electron and PipeWire.
 
-As of version 1.2.0, this daemon is in experimental for audio playbacks, while **audio capture is still a work in progress** (falling back to the volume solution). This feature was rather large, making it hard to ensure all functionality by myself. If you encounter any issues with this feature, feel free to create [issues](https://codeberg.org/ponleou/pipetron/issues) or [PRs](https://codeberg.org/ponleou/pipetron/pulls).
+> May 8: I've been personally using the audio daemon for the past 4 months daily without issues, so I'd say it's safe to remove the experimental labelling. Audio capture will be worked on starting June.
+
+> Feb 19: As of version 1.2.0, this daemon is in **experimental** for audio playbacks, while **audio capture is still a work in progress** (falling back to the volume solution). This feature was rather large, making it hard to ensure all functionality by myself. If you encounter any issues with this feature, feel free to create [issues](https://codeberg.org/ponleou/pipetron/issues) or [PRs](https://codeberg.org/ponleou/pipetron/pulls).
 
 ## Images
 

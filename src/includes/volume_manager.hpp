@@ -1,9 +1,14 @@
 #pragma once
 
 #include "nodes_manager.hpp"
-#include "pipewire/stream.h"
 #include <array>
+#include <pipewire/context.h>
+#include <pipewire/proxy.h>
+#include <pipewire/stream.h>
 #include <spa/param/audio/format-utils.h>
+#include <spa/param/audio/raw.h>
+#include <spa/param/props.h>
+#include <spa/pod/dynamic.h>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -30,50 +35,23 @@ class VolumeManagerArgs {
     friend class VolumeManager;
 
     /**
-     * Arguments for `VolumeManager::post_state_process_hook`
+     * Arguments for VolumeManager::post_node_process_hook
      *
-     * @param onode_id Used to access `vnode_data`, and modify `sync_params_data` within VolumeStores
+     * @param onode_id  ID of the onode (electron node)
+     * @param onode     pw_node pointer of onode from registry bind
      */
-    struct post_state_process_hook_args {
+    struct post_node_process_hook_args {
         const uint32_t onode_id;
+        pw_node *onode;
 
-        post_state_process_hook_args(const uint32_t onode_id) : onode_id(onode_id) {
-        }
-    };
-
-    /**
-     * Arguments for `VolumeManager::on_state_change_single_callback`.
-     *
-     * @param onode_id                          The original node ID.
-     * @param stream_processed_flag             A boolean flag to check whether the single callback has been processed.
-     * @param self_listener                     The `spa_hook` listener for `on_state_change_single_callback`,
-     * automatically removed within the callback once processed.
-     * @param post_state_process_hook         A hook function called after the the single callback is processed.
-     * @param post_state_process_hook_args    The arguments passed as data into `post_state_process_hook`.
-     */
-    struct state_change_single_callback_args {
-        const uint32_t onode_id;
-        bool stream_processed_flag;
-
-        spa_hook *self_listener;
-
-        void *(*post_state_process_hook)(void *args);
-        void *post_state_process_hook_args;
-
-        state_change_single_callback_args(const uint32_t onode_id, void *(*post_state_process_hook)(void *args),
-                                          void *post_state_process_hook_args)
-            : onode_id(onode_id) {
-            this->stream_processed_flag = false;
-            this->self_listener = new spa_hook();
-            this->post_state_process_hook = post_state_process_hook;
-            this->post_state_process_hook_args = post_state_process_hook_args;
+        post_node_process_hook_args(const uint32_t onode_id, pw_node *onode) : onode_id(onode_id) {
+            this->onode = onode;
         }
 
-        ~state_change_single_callback_args() {
-            if (this->self_listener) {
-                spa_hook_remove(this->self_listener);
-                delete this->self_listener;
-                this->self_listener = nullptr;
+        ~post_node_process_hook_args() {
+            if (this->onode) {
+                pw_proxy_destroy((pw_proxy *)this->onode);
+                this->onode = nullptr;
             }
         }
     };
@@ -93,29 +71,44 @@ class VolumeStores {
     /**
      * Contains data required to sync volume data between onode and vnode
      *
-     * @param vnode_reg               vnode's registry, required to maintain accessibility of `vnode`
-     * @param vnode                   pw_node of vnode, used to read and copy volume data to `param_data`
-     * @param onode                   pw_node of onode, used to set volume data from `param_data`
+     * @param vstream                 pw_stream of vnode, used to read and copy volume data to `param_data`
+     * @param onode                   pw_node of onode, used to set volume data from `param_data` and also copy mute
+     * prop to `param_data`
      * @param ignore_next_onode_event Flag to prevent event callback loop when onode's volume data is modified
-     * @param param_data              Contains volume data from `vnode`
+     * @param param_data              Contains accumulative and updated volume data with 4 fields: mute, volume,
+     * channelmap and channelvolume.
      * @param listeners               Maintains `onode` and `vnode` 's `param_changed` event listeners for cleanup.
      */
     struct sync_params_data {
-        pw_registry *vnode_reg;
-        pw_node *vnode;
-
+        pw_stream &vstream;
         pw_node *onode;
         bool ignore_next_onode_event;
         spa_pod *param_data;
         array<spa_hook *, 2> listeners;
 
-        sync_params_data() {
-            this->vnode = nullptr;
-            this->onode = nullptr;
-            this->vnode_reg = nullptr;
-            this->param_data = nullptr;
+        sync_params_data(pw_stream &vstream, pw_node *onode, const spa_audio_info_raw &audio_info) : vstream(vstream) {
+            this->onode = onode;
             this->ignore_next_onode_event = true;
             this->listeners = {};
+            this->listeners[0] = new spa_hook();
+            this->listeners[1] = new spa_hook();
+
+            spa_pod_dynamic_builder builder;
+            spa_pod_dynamic_builder_init(&builder, nullptr, 0, 128);
+
+            float volumes[audio_info.channels];
+            for (uint32_t i = 0; i < audio_info.channels; i++)
+                volumes[i] = 1.0f;
+
+            spa_pod *temp = (spa_pod *)spa_pod_builder_add_object(
+                &builder.b, SPA_TYPE_OBJECT_Props, SPA_PARAM_Props, SPA_PROP_volume, SPA_POD_Float(1.0f),
+                SPA_PROP_channelVolumes, SPA_POD_Array(sizeof(float), SPA_TYPE_Float, audio_info.channels, volumes),
+                SPA_PROP_channelMap,
+                SPA_POD_Array(sizeof(uint32_t), SPA_TYPE_Id, audio_info.channels, audio_info.position), SPA_PROP_mute,
+                SPA_POD_Bool(false));
+
+            this->param_data = spa_pod_copy(temp);
+            spa_pod_dynamic_builder_clean(&builder);
         }
 
         ~sync_params_data() {
@@ -128,19 +121,9 @@ class VolumeStores {
             }
             this->listeners.fill(nullptr);
 
-            if (this->vnode) {
-                pw_proxy_destroy((pw_proxy *)this->vnode);
-                this->vnode = nullptr;
-            }
-
             if (this->onode) {
                 pw_proxy_destroy((pw_proxy *)this->onode);
                 this->onode = nullptr;
-            }
-
-            if (this->vnode_reg) {
-                pw_proxy_destroy((pw_proxy *)this->vnode_reg);
-                this->vnode_reg = nullptr;
             }
 
             if (this->param_data) {
@@ -241,12 +224,19 @@ class VolumeStores {
         static NodesManager::node_info &get_modifiable_onode_info(uint32_t onode_id);
 
         /**
-         * Provides the reference to the `onode_to_sync_params_data` map entry for `onode_id` key. If the entry does not
-         * exist, the entry will be created lazily.
+         * Deletes existing `sync_params_data` instance in `onode_id` entry from `onode_to_sync_params_data` map (if
+         * any), and creates a new `sync_params_data` instance.
+         *
+         * @param onode_id      ID of the onode (electron node)
+         * @param vstream       pw_stream of the virtual stream replicating onode
+         * @param onode         pw_node pointer of onode from registry bind
+         * @param audio_info    raw audio info used to construct the appropriate param for the sync (uses its channels
+         * and positions)
          *
          * @return reference to the `sync_params_data` entry for `onode_id` key.
          */
-        static sync_params_data &get_modifiable_sync_params_data(uint32_t onode_id);
+        static sync_params_data &start_new_sync_params_data(uint32_t onode_id, pw_stream &vstream, pw_node *onode,
+                                                            const spa_audio_info_raw &audio_info);
 
         /**
          * Deletes and removes all data entries within all maps from `VolumeStores` connected with `onode_id`.
@@ -282,32 +272,11 @@ class VolumeManager {
     static void *post_node_process_hook(NodesManager::create_node_args *vnode_args, void *data);
 
     /**
-     * A one-shot single callback for PipeWire `vnode` 's `state_change` event. Once the state is
-     * PW_STREAM_STATE_PAUSED, indicating the stream is ready, and it can record the stream's node ID.
-     *
-     * After recording the node ID, it removes its own listener, and calls `post_state_process_hook`.
-     */
-    static void on_state_change_single_callback(void *data, enum pw_stream_state old, enum pw_stream_state state,
-                                                const char *error);
-
-    /**
-     * A hook function to run after `on_state_change_single_callback`
-     *
-     * It sets up the one-way volume data sync between `vnode` and `onode`. It creates events for `param_changed` on
-     * `vnode` to call `on_vnode_param_props`, and event for `param` on `onode` to call `on_onode_param_props`.
-     *
-     * Also sets up `sync_param_data` from `VolumeStores`.
-     *
-     * @param data The pointer to the data for post hook arguments where the post hook was set to run.
-     */
-    static void *post_state_process_hook(void *data);
-
-    /**
      * Callback for `vnode` `param_changed` event. Copies the new SPA_PARAM_Props pod, containing volume data, into
      * `sync_param_data` and and syncs `onode` to the data. Also sets `ignore_next_onode_event` from `sync_param_data`
      * to skip the next `onode` 's `param` PipeWire event triggered when syncing `onode` volume data
      */
-    static void on_vnode_param_props(void *data, uint32_t id, const struct spa_pod *param);
+    static void on_vstream_param_props(void *data, uint32_t id, const struct spa_pod *param);
 
     /**
      * Callback for `onode` `param` event. Re-syncs its volume data to the data stored inside `sync_param_data`. Also

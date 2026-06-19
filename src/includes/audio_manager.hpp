@@ -1,19 +1,20 @@
 #pragma once
 
 #include "nodes_manager.hpp"
-#include "pipewire/context.h"
-#include "pipewire/core.h"
-#include "pipewire/proxy.h"
-#include "pipewire/stream.h"
-#include "spa/param/audio/raw.h"
-#include "spa/param/props.h"
-#include "spa/utils/hook.h"
 #include <array>
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <pipewire/context.h>
+#include <pipewire/core.h>
+#include <pipewire/proxy.h>
+#include <pipewire/stream.h>
 #include <queue>
 #include <spa/param/audio/format-utils.h>
+#include <spa/param/audio/raw.h>
+#include <spa/param/props.h>
+#include <spa/pod/dynamic.h>
+#include <spa/utils/hook.h>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -320,22 +321,22 @@ class AudioStores {
             this->self_listener = new spa_hook();
             this->ignore_next_param_event = false;
 
-            uint8_t buffer[1024];
-            spa_pod_builder b;
-            spa_pod_builder_init(&b, buffer, sizeof(buffer));
+            spa_pod_dynamic_builder builder;
+            spa_pod_dynamic_builder_init(&builder, nullptr, 0, 128);
 
             float volumes[audio_info.channels];
             for (uint32_t i = 0; i < audio_info.channels; i++)
                 volumes[i] = 1.0f;
 
             spa_pod *temp = (spa_pod *)spa_pod_builder_add_object(
-                &b, SPA_TYPE_OBJECT_Props, SPA_PARAM_Props, SPA_PROP_volume, SPA_POD_Float(1.0f),
+                &builder.b, SPA_TYPE_OBJECT_Props, SPA_PARAM_Props, SPA_PROP_volume, SPA_POD_Float(1.0f),
                 SPA_PROP_channelVolumes, SPA_POD_Array(sizeof(float), SPA_TYPE_Float, audio_info.channels, volumes),
                 SPA_PROP_channelMap,
                 SPA_POD_Array(sizeof(uint32_t), SPA_TYPE_Id, audio_info.channels, audio_info.position), SPA_PROP_mute,
                 SPA_POD_Bool(false));
 
             this->param = spa_pod_copy(temp);
+            spa_pod_dynamic_builder_clean(&builder);
         }
 
         ~lock_elec_node_param_data() {
@@ -374,22 +375,22 @@ class AudioStores {
         lock_stream_param_data(pw_stream &stream, const spa_audio_info_raw &audio_info) : stream(stream) {
             this->self_listener = new spa_hook();
 
-            uint8_t buffer[1024];
-            spa_pod_builder b;
-            spa_pod_builder_init(&b, buffer, sizeof(buffer));
+            spa_pod_dynamic_builder builder;
+            spa_pod_dynamic_builder_init(&builder, nullptr, 0, 128);
 
             float volumes[audio_info.channels];
             for (uint32_t i = 0; i < audio_info.channels; i++)
                 volumes[i] = 1.0f;
 
             spa_pod *temp = (spa_pod *)spa_pod_builder_add_object(
-                &b, SPA_TYPE_OBJECT_Props, SPA_PARAM_Props, SPA_PROP_volume, SPA_POD_Float(1.0f),
+                &builder.b, SPA_TYPE_OBJECT_Props, SPA_PARAM_Props, SPA_PROP_volume, SPA_POD_Float(1.0f),
                 SPA_PROP_channelVolumes, SPA_POD_Array(sizeof(float), SPA_TYPE_Float, audio_info.channels, volumes),
                 SPA_PROP_channelMap,
                 SPA_POD_Array(sizeof(uint32_t), SPA_TYPE_Id, audio_info.channels, audio_info.position), SPA_PROP_mute,
                 SPA_POD_Bool(false));
 
             this->param = spa_pod_copy(temp);
+            spa_pod_dynamic_builder_clean(&builder);
         }
 
         ~lock_stream_param_data() {
@@ -486,8 +487,8 @@ class AudioStores {
         static NodesManager::node_info &get_modifiable_elec_node_info(uint32_t elec_node_id);
 
         /**
-         * Function to create a `lock_elec_node_param_data` entry in the `lock_elec_node_param_datas` map for
-         * `elec_node_id` key.
+         * Deletes existing `lock_elec_node_param_data` instance in `elec_node_id` entry from
+         * `lock_elec_node_param_datas` map (if any), and creates a new `lock_elec_node_param_data` instance.
          *
          * @param elec_node_id  the ID of the electron node, which is used for the key of the map's entry
          * @param elec_node     the pw_node pointer of the electron node from the registry bind
@@ -497,8 +498,8 @@ class AudioStores {
         static lock_elec_node_param_data &start_new_lock_elec_node_param_data(uint32_t elec_node_id, pw_node *elec_node,
                                                                               const spa_audio_info_raw &audio_info);
         /**
-         * Function to create a `lock_stream_param_data` entry in the `elec_node_to_lock_stream_param_data` map for
-         * `elec_node_id` key.
+         * Deletes existing `lock_stream_param_data` instance in `elec_node_id` entry from
+         * `elec_node_to_lock_stream_param_data` map (if any), and creates a new `lock_stream_param_data` instance.
          *
          * @param elec_node_id  the ID of the electron node, which is used for the key of the map's entry
          * @param elec_node     the pw_stream reference of the stream
@@ -512,6 +513,10 @@ class AudioStores {
          * Deletes existing `transfer_playback_audio_data` instance in `elec_node_id` entry from
          * `elec_node_to_transfer_playback_audio_data` map (if any), and creates a new `transfer_playback_audio_data`
          * instance.
+         *
+         * @param elec_node_id  the ID of the electron node, which is used for the key of the map's entry
+         * @param capture       pw_stream of the capture node, which will add its audio data into the queue
+         * @param vnode         pw_stream of the virtual node, which will play audio data from the queue
          *
          * @return reference to the new `transfer_playback_audio_data` instance
          */

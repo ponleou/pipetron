@@ -2,11 +2,11 @@
 #include "includes/audio_manager.hpp"
 #include "includes/utils.hpp"
 #include "includes/volume_manager.hpp"
-#include "pipewire/core.h"
-#include "pipewire/keys.h"
-#include "pipewire/link.h"
-#include "pipewire/pipewire.h"
 #include <build.h>
+#include <pipewire/core.h>
+#include <pipewire/keys.h>
+#include <pipewire/link.h>
+#include <pipewire/pipewire.h>
 
 struct AudioDaemon::registry_event_global_data {
     struct pw_main_loop *main_loop;
