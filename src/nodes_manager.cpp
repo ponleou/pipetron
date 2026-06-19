@@ -17,7 +17,7 @@
 #include <spa/param/audio/format-utils.h>
 #include <spa/param/param.h>
 #include <spa/pod/compare.h>
-#include <spa/pod/dynamic.h>
+#include <spa/pod/builder.h>
 #include <spa/utils/dict.h>
 #include <spa/utils/hook.h>
 #include <string>
@@ -471,15 +471,15 @@ void NodesManager::replicate_vnode(const NodesManager::create_node_args &args,
         (args.override_desc.media_name != "" ? args.override_desc.media_name : args.onode.media_name).c_str(),
         stream_props);
 
-    spa_pod_dynamic_builder builder;
-    spa_pod_dynamic_builder_init(&builder, nullptr, 0, 256);
+    // this pod_builder cant be dynamic like in volume/audio manager in syncing params
+    // i dont know why
+    uint8_t buffer[1024];
+    spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
 
     const spa_pod *params[1];
-    params[0] = spa_format_audio_raw_build(&builder.b, SPA_PARAM_EnumFormat, &args.onode.audio_info);
+    params[0] = spa_format_audio_raw_build(&builder, SPA_PARAM_EnumFormat, &args.onode.audio_info);
 
-    spa_pod_dynamic_builder_clean(&builder);
-
-    output.context = virtual_context;
+output.context = virtual_context;
     output.core = virtual_core;
     output.stream = virtual_stream;
 
@@ -514,13 +514,14 @@ void NodesManager::connect_capture_to_onode(const create_node_args &onode_args, 
             .c_str(),
         stream_props);
 
-    spa_pod_dynamic_builder builder;
-    spa_pod_dynamic_builder_init(&builder, nullptr, 0, 256);
+    // this pod_builder cant be dynamic like in volume/audio manager in syncing params
+    // i dont know why
+    uint8_t buffer[1024];
+    spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
 
     const spa_pod *params[1];
-    params[0] = spa_format_audio_raw_build(&builder.b, SPA_PARAM_EnumFormat, &onode_args.onode.audio_info);
+    params[0] = spa_format_audio_raw_build(&builder, SPA_PARAM_EnumFormat, &onode_args.onode.audio_info);
 
-    spa_pod_dynamic_builder_clean(&builder);
 
     output.stream = stream;
     output.context = context;
