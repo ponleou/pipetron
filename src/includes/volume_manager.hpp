@@ -1,14 +1,14 @@
 #pragma once
 
 #include "nodes_manager.hpp"
-#include "pipewire/context.h"
-#include "pipewire/proxy.h"
-#include "pipewire/stream.h"
-#include "spa/param/audio/raw.h"
-#include "spa/param/props.h"
-#include "spa/pod/dynamic.h"
 #include <array>
+#include <pipewire/context.h>
+#include <pipewire/proxy.h>
+#include <pipewire/stream.h>
 #include <spa/param/audio/format-utils.h>
+#include <spa/param/audio/raw.h>
+#include <spa/param/props.h>
+#include <spa/pod/dynamic.h>
 #include <string>
 #include <unordered_map>
 #include <vector>

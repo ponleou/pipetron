@@ -1,11 +1,11 @@
 #pragma once
 
-#include "pipewire/core.h"
-#include "pipewire/node.h"
-#include "pipewire/stream.h"
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <pipewire/core.h>
+#include <pipewire/node.h>
+#include <pipewire/stream.h>
 #include <spa/param/audio/format-utils.h>
 #include <string>
 #include <unordered_map>
