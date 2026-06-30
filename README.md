@@ -34,8 +34,6 @@ Volume daemon uses a simple approach to solve the issue: replicate all Electron 
 
 Audio daemon works by also replicating all Electron audio streams with its actual app name and icons, but also transfers the audio data from the original Electron streams into the replicated stream. It aims to be integrated seamlessly with daily audio usages, ensuring link isolation of the original Electron stream, and the expected link connection with the replicated streams. As a byproduct, the solution can be more bloated, but should solve the general issue regarding Electron and PipeWire.
 
-> May 8: I've been personally using the audio daemon for the past 4 months daily without issues, so I'd say it's safe to remove the experimental labelling. Audio capture will be worked on starting June.
-
 > [!IMPORTANT]
 > This daemon is implemented only for audio playbacks, while **audio capture is currently not planned** (falling back to the volume solution). If you feel an audio capture daemon is necessary for your usage, feel free to open an [issues](https://codeberg.org/ponleou/pipetron/issues) or [PRs](https://codeberg.org/ponleou/pipetron/pulls) to let me know it is a wanted feature.
 
