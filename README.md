@@ -36,7 +36,8 @@ Audio daemon works by also replicating all Electron audio streams with its actua
 
 > May 8: I've been personally using the audio daemon for the past 4 months daily without issues, so I'd say it's safe to remove the experimental labelling. Audio capture will be worked on starting June.
 
-> Feb 19: As of version 1.2.0, this daemon is in **experimental** for audio playbacks, while **audio capture is still a work in progress** (falling back to the volume solution). This feature was rather large, making it hard to ensure all functionality by myself. If you encounter any issues with this feature, feel free to create [issues](https://codeberg.org/ponleou/pipetron/issues) or [PRs](https://codeberg.org/ponleou/pipetron/pulls).
+> [!IMPORTANT]
+> As of version 1.2.1, this daemon is in **experimental** for audio playbacks, while **audio capture is still a work in progress** (falling back to the volume solution). This feature was rather large, making it hard to ensure all functionality by myself. If you encounter any issues with this feature, feel free to create [issues](https://codeberg.org/ponleou/pipetron/issues) or [PRs](https://codeberg.org/ponleou/pipetron/pulls).
 
 ## Images
 
