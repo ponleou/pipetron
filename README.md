@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> Project is archived as the Electron issue is fixed by [#49270](https://github.com/electron/electron/pull/49270). This daemon can still be used and still works to fix outdated Electron apps. However, further updates to this project are futile.
+
+---
+
 # Pipetron
 
 Pipetron (**Pipe**Wire + Elec**tron**) is a third-party daemon to fix Electron app audio streams naming conflicts in PipeWire. Electron apps have a long-running issue with being unable to change its audio stream names from the permanent "Chromium" string. The issue stretches from minor annoyances such as difficulty differentiating Electron apps within volume controllers, to more major issues with services that depends on PipeWire nodes' names, which includes WirePlumber and qpwgraph.
